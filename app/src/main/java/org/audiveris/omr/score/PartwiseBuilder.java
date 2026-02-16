@@ -293,6 +293,9 @@ public class PartwiseBuilder
     /** Maximum level number. */
     private static final int MAX_LEVEL_NUMBER = 16;
 
+    /** Default key mode when mode cannot be determined. */
+    private static final String DEFAULT_KEY_MODE = "major";
+
     //~ Instance fields ----------------------------------------------------------------------------
 
     /** The ScorePartwise instance to be populated. */
@@ -1812,11 +1815,11 @@ public class PartwiseBuilder
                     // Collect key signature info for note mapping (only for global keys)
                     if (noteMapping != null && current.pmMeasure != null) {
                         try {
-                            String mode = "major"; // Default to major, could be enhanced to detect minor
+                            // Note: Mode detection (major/minor) is not currently implemented
                             noteMapping.addKeySignature(new NoteMapping.KeySignatureInfo(
                                 current.logicalPart.getPid(),
                                 current.pmMeasure.getNumber(),
-                                keySignature.getFifths(), mode));
+                                keySignature.getFifths(), DEFAULT_KEY_MODE));
                         } catch (Exception ex) {
                             logger.warn("Error collecting key signature info for note mapping", ex);
                         }

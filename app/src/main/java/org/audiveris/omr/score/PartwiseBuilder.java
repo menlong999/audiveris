@@ -2156,12 +2156,18 @@ public class PartwiseBuilder
                                 
                                 // Calculate cumulative time in seconds
                                 int divisions = current.page.simpleDurationOf(Rational.QUARTER);
-                                double cumulativeSeconds = (cumulativeOffset * 60.0) / (divisions * currentTempo);
+                                double cumulativeSeconds = 0;
+                                if (divisions > 0 && currentTempo > 0) {
+                                    cumulativeSeconds = (cumulativeOffset * 60.0) / (divisions * currentTempo);
+                                }
                                 
                                 // Calculate measure duration
                                 Rational measureDur = measure.getStack().getActualDuration();
                                 int measureDurInDivisions = (measureDur != null) ? current.page.simpleDurationOf(measureDur) : 0;
-                                double measureDurSeconds = (measureDurInDivisions * 60.0) / (divisions * currentTempo);
+                                double measureDurSeconds = 0;
+                                if (divisions > 0 && currentTempo > 0) {
+                                    measureDurSeconds = (measureDurInDivisions * 60.0) / (divisions * currentTempo);
+                                }
                                 
                                 noteMapping.addMeasure(new NoteMapping.MeasureInfo(
                                     partId, measureNum, sheetNum, sysIdx,

@@ -322,6 +322,30 @@ public class PartwiseBuilder
     /** Factory for ProxyMusic entities. */
     private final ObjectFactory factory = new ObjectFactory();
 
+    /** Note mapping collector for JSON export (optional). */
+    private NoteMapping noteMapping;
+
+    /** Global note counter across all parts. */
+    private int globalNoteCounter = 0;
+
+    /** Beam group counter for assigning unique IDs. */
+    private int beamGroupCounter = 0;
+
+    /** Map from BeamGroupInter to assigned ID. */
+    private final Map<BeamGroupInter, Integer> beamGroupIds = new HashMap<>();
+
+    /** Per-part note counters. */
+    private final Map<String, Integer> partNoteCounters = new HashMap<>();
+
+    /** Cumulative time offset tracking per part (in divisions). */
+    private final Map<String, Integer> partCumulativeTimeOffsets = new HashMap<>();
+
+    /** Cumulative time in seconds tracking per part. */
+    private final Map<String, Double> partCumulativeTimeSeconds = new HashMap<>();
+
+    /** Current tempo in BPM per part (defaults to 120). */
+    private final Map<String, Double> partCurrentTempo = new HashMap<>();
+
     //~ Constructors -------------------------------------------------------------------------------
 
     /**
@@ -3480,6 +3504,30 @@ public class PartwiseBuilder
         return builder.scorePartwise;
     }
 
+    //--------------------//
+    // buildWithMapping   //
+    //--------------------//
+    /**
+     * Export a Score instance to a ScorePartwise and collect note mapping data.
+     *
+     * @param score the score to be exported
+     * @return BuildResult containing both ScorePartwise and NoteMapping
+     * @throws InterruptedException if the thread has been interrupted
+     * @throws ExecutionException   if a checked exception was thrown
+     */
+    public static BuildResult buildWithMapping (Score score)
+        throws InterruptedException, ExecutionException
+    {
+        Objects.requireNonNull(score, "Trying to export a null score");
+
+        final PartwiseBuilder builder = new PartwiseBuilder(score);
+        builder.noteMapping = new NoteMapping();
+
+        builder.processScore();
+
+        return new BuildResult(builder.scorePartwise, builder.noteMapping);
+    }
+
     //---------//
     // preload //
     //---------//
@@ -3491,6 +3539,34 @@ public class PartwiseBuilder
     }
 
     //~ Inner Classes ------------------------------------------------------------------------------
+
+    //-------------//
+    // BuildResult //
+    //-------------//
+    /**
+     * Container for build results with note mapping.
+     */
+    public static class BuildResult
+    {
+        /** The exported ScorePartwise. */
+        public final ScorePartwise scorePartwise;
+
+        /** The collected note mapping. */
+        public final NoteMapping noteMapping;
+
+        /**
+         * Create a BuildResult.
+         *
+         * @param scorePartwise the ScorePartwise
+         * @param noteMapping   the NoteMapping
+         */
+        public BuildResult (ScorePartwise scorePartwise,
+                           NoteMapping noteMapping)
+        {
+            this.scorePartwise = scorePartwise;
+            this.noteMapping = noteMapping;
+        }
+    }
 
     //---------------//
     // ClefIterators //

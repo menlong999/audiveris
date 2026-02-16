@@ -2351,6 +2351,226 @@ public class PartwiseBuilder
         current.endMeasure();
         tupletNumbers.clear();
         isFirst.measure = false;
+
+        // Update cumulative time offset for note mapping
+        if (noteMapping != null && !current.repeatCopying && !measure.isDummy()) {
+            try {
+                String partId = current.logicalPart.getPid();
+                Integer cumulativeOffset = partCumulativeTimeOffsets.get(partId);
+                if (cumulativeOffset == null) {
+                    cumulativeOffset = 0;
+                }
+                
+                // Add this measure's duration to cumulative offset
+                Rational measureDur = measure.getStack().getActualDuration();
+                if (measureDur != null) {
+                    int measureDurInDivisions = current.page.simpleDurationOf(measureDur);
+                    partCumulativeTimeOffsets.put(partId, cumulativeOffset + measureDurInDivisions);
+                }
+            } catch (Exception ex) {
+                logger.warn("Error updating cumulative time offset for note mapping", ex);
+            }
+        }
+    }
+
+    //--------------------//
+    // collectNoteMapping //
+    //--------------------//
+    /**
+     * Collect note mapping data for the given note.
+     *
+     * @param note           the note inter
+     * @param chord          the containing chord
+     * @param staff          the staff
+     * @param isFirstInChord whether this is the first note in the chord
+     * @param isMeasureRest  whether this is a measure rest
+     */
+    private void collectNoteMapping (AbstractNoteInter note,
+                                    AbstractChordInter chord,
+                                    Staff staff,
+                                    boolean isFirstInChord,
+                                    boolean isMeasureRest)
+    {
+        try {
+            final SIGraph sig = note.getSig();
+            String partId = current.logicalPart.getPid();
+
+            // Get or initialize per-part note counter
+            Integer noteIndex = partNoteCounters.get(partId);
+            if (noteIndex == null) {
+                noteIndex = 0;
+            }
+            partNoteCounters.put(partId, noteIndex + 1);
+
+            // Positioning
+            int globalNoteIndex = globalNoteCounter++;
+            String measureNumber = current.pmMeasure.getNumber();
+            int staffNumber = 1 + staff.getIndexInPart();
+            String voiceId = (chord.getVoice() != null) ? "" + chord.getVoice().getId() : "1";
+            int noteIndexInChord = chord.getNotes().indexOf(note);
+            int sheetNumber = current.page.getSheet().getStub().getNumber();
+            int systemIndex = current.page.getSystems().indexOf(current.system);
+
+            // Note properties
+            boolean isRest = note.getShape().isRest();
+            boolean isGrace = note.getShape().isSmallHead();
+
+            // Pitch
+            String step = null;
+            int octave = 0;
+            int alter = 0;
+            int absolutePitch = 0;
+            int integerPitch = note.getIntegerPitch();
+            double expectedFrequency = 0.0;
+
+            if (!isRest) {
+                step = note.getStep().name();
+                octave = note.getOctave();
+                absolutePitch = note.getAbsolutePitch();
+                
+                // Get alteration
+                if (note instanceof HeadInter head) {
+                    Key key = current.keys.get(staff.getIndexInPart());
+                    Integer fifths = (key != null) ? key.getFifths().intValue() : null;
+                    alter = head.getAlteration(fifths);
+                }
+                
+                // Calculate expected frequency: 440 * 2^((pitch - 69) / 12)
+                expectedFrequency = 440.0 * Math.pow(2.0, (absolutePitch - 69) / 12.0);
+            }
+
+            // Duration/Type
+            String noteType = null;
+            if (!isMeasureRest) {
+                noteType = getNoteTypeName(note);
+            }
+            int dots = chord.getDotsNumber();
+            int stemDirection = 0;
+            if (chord.getStem() != null) {
+                Point tail = chord.getTailLocation();
+                stemDirection = (tail.y < note.getCenter().y) ? 1 : -1;
+            }
+
+            // Beam group ID
+            Integer beamGroupId = null;
+            BeamGroupInter beamGroup = chord.getBeamGroup();
+            if (beamGroup != null) {
+                beamGroupId = beamGroupIds.get(beamGroup);
+                if (beamGroupId == null) {
+                    beamGroupId = ++beamGroupCounter;
+                    beamGroupIds.put(beamGroup, beamGroupId);
+                }
+            }
+
+            // Time
+            int timeOffset = 0;
+            int duration = 0;
+            Rational timeOffsetRational = chord.getTimeOffset();
+            if (timeOffsetRational != null) {
+                timeOffset = current.page.simpleDurationOf(timeOffsetRational);
+            }
+
+            if (!isGrace) {
+                Rational dur;
+                if (chord.isMeasureRest()) {
+                    Rational measureDur = current.measure.getStack().getActualDuration();
+                    dur = (measureDur != null) ? measureDur : Rational.ONE;
+                } else {
+                    dur = chord.getDuration();
+                }
+                if (dur != null) {
+                    duration = current.page.simpleDurationOf(dur);
+                }
+            }
+
+            // Calculate time in seconds
+            Integer cumulativeOffset = partCumulativeTimeOffsets.get(partId);
+            if (cumulativeOffset == null) {
+                cumulativeOffset = 0;
+            }
+            Double currentTempo = partCurrentTempo.get(partId);
+            if (currentTempo == null) {
+                currentTempo = 120.0;
+            }
+            int divisions = current.page.simpleDurationOf(Rational.QUARTER);
+            double timeOffsetSeconds = ((cumulativeOffset + timeOffset) * 60.0) / (divisions * currentTempo);
+            double durationSeconds = (duration * 60.0) / (divisions * currentTempo);
+
+            // Tied duration (follow tie chain forward)
+            int tiedDuration = duration;
+            double tiedDurationSeconds = durationSeconds;
+            boolean isTiedStart = false;
+            boolean isTiedStop = false;
+
+            if (!isRest && note instanceof HeadInter head) {
+                for (Relation rel : sig.getRelations(head, SlurHeadRelation.class)) {
+                    SlurInter slur = (SlurInter) sig.getOppositeInter(head, rel);
+                    if (slur.isTie()) {
+                        if (slur.getHead(HorizontalSide.LEFT) == head) {
+                            isTiedStart = true;
+                            // Follow tie chain forward
+                            HeadInter currentHead = head;
+                            SlurInter currentSlur = slur;
+                            while (currentSlur != null && currentSlur.isTie()) {
+                                HeadInter nextHead = currentSlur.getHead(HorizontalSide.RIGHT);
+                                if (nextHead != null && nextHead != currentHead) {
+                                    AbstractChordInter nextChord = nextHead.getChord();
+                                    if (nextChord != null) {
+                                        Rational nextDur = nextChord.getDuration();
+                                        if (nextDur != null) {
+                                            int nextDurDiv = current.page.simpleDurationOf(nextDur);
+                                            tiedDuration += nextDurDiv;
+                                            tiedDurationSeconds += (nextDurDiv * 60.0) / (divisions * currentTempo);
+                                        }
+                                    }
+                                    // Look for next tie
+                                    currentHead = nextHead;
+                                    currentSlur = null;
+                                    for (Relation nextRel : sig.getRelations(currentHead, SlurHeadRelation.class)) {
+                                        SlurInter nextSlur = (SlurInter) sig.getOppositeInter(currentHead, nextRel);
+                                        if (nextSlur.isTie() && nextSlur.getHead(HorizontalSide.LEFT) == currentHead) {
+                                            currentSlur = nextSlur;
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                        if (slur.getHead(HorizontalSide.RIGHT) == head) {
+                            isTiedStop = true;
+                        }
+                    }
+                }
+            }
+
+            // Geometry
+            Rectangle bounds = note.getBounds();
+            Point center = note.getCenter();
+            Rectangle chordBounds = chord.getBounds();
+            int staffTopY = staff.getFirstLine().yAt(center.x);
+            int staffBottomY = staff.getLastLine().yAt(center.x);
+
+            // Set divisions in noteMapping if not already set
+            if (noteMapping.isEmpty()) {
+                noteMapping.setDivisions(divisions);
+            }
+
+            // Create and add note entry
+            NoteMapping.NoteEntry entry = new NoteMapping.NoteEntry(
+                noteIndex, globalNoteIndex, partId, measureNumber, staffNumber, voiceId,
+                noteIndexInChord, sheetNumber, systemIndex, isRest, isGrace, isMeasureRest,
+                isTiedStart, isTiedStop, step, octave, alter, absolutePitch, integerPitch,
+                expectedFrequency, noteType, dots, stemDirection, beamGroupId, timeOffset,
+                duration, timeOffsetSeconds, durationSeconds, tiedDuration, tiedDurationSeconds,
+                bounds, center, chordBounds, staffTopY, staffBottomY);
+
+            noteMapping.addNote(entry);
+
+        } catch (Exception ex) {
+            logger.warn("Error collecting note mapping for {} in {}", note, current.page, ex);
+        }
     }
 
     //-------------//
@@ -2739,6 +2959,11 @@ public class PartwiseBuilder
 
             // Everything is OK
             current.pmMeasure.getNoteOrBackupOrForward().add(current.pmNote);
+
+            // Collect note mapping data
+            if (noteMapping != null && !current.measure.isDummy() && !current.repeatCopying) {
+                collectNoteMapping(note, chord, staff, isFirstInChord, isMeasureRest);
+            }
         } catch (Exception ex) {
             logger.warn("Error visiting {} in {}", note, current.page, ex);
         }

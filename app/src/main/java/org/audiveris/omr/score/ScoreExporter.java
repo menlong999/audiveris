@@ -54,6 +54,9 @@ public class ScoreExporter
     /** The related score. */
     private final Score score;
 
+    /** Last collected note mapping (for export to JSON). */
+    private NoteMapping lastNoteMapping;
+
     //~ Constructors -------------------------------------------------------------------------------
 
     /**
@@ -118,8 +121,10 @@ public class ScoreExporter
     {
         Objects.requireNonNull(os, "Trying to export a score to a null output stream");
 
-        // Build the ScorePartwise proxy
-        ScorePartwise scorePartwise = PartwiseBuilder.build(score);
+        // Build the ScorePartwise proxy with note mapping
+        PartwiseBuilder.BuildResult result = PartwiseBuilder.buildWithMapping(score);
+        ScorePartwise scorePartwise = result.scorePartwise;
+        this.lastNoteMapping = result.noteMapping;
 
         // Marshal the proxy
         if (compressed) {
@@ -162,6 +167,45 @@ public class ScoreExporter
         try (OutputStream os = new FileOutputStream(path.toString())) {
             export(os, signed, scoreName, compressed);
             logger.info("Score {} exported to {}", scoreName, path);
+        }
+        
+        // Export note mapping to JSON file
+        exportNoteMapping(path);
+    }
+
+    //---------------------//
+    // exportNoteMapping   //
+    //---------------------//
+    /**
+     * Export the note mapping to a JSON file alongside the MusicXML file.
+     *
+     * @param musicXmlPath the path to the MusicXML file
+     */
+    private void exportNoteMapping (Path musicXmlPath)
+    {
+        if (lastNoteMapping == null || lastNoteMapping.isEmpty()) {
+            return;
+        }
+
+        try {
+            String pathStr = musicXmlPath.toString();
+            String jsonPathStr;
+            
+            // Determine JSON file path based on MusicXML file extension
+            if (pathStr.endsWith(".mxl")) {
+                jsonPathStr = pathStr.substring(0, pathStr.length() - 4) + ".mapping.json";
+            } else if (pathStr.endsWith(".xml")) {
+                jsonPathStr = pathStr.substring(0, pathStr.length() - 4) + ".mapping.json";
+            } else {
+                jsonPathStr = pathStr + ".mapping.json";
+            }
+            
+            // Write JSON to file
+            java.nio.file.Files.writeString(java.nio.file.Path.of(jsonPathStr), 
+                                           lastNoteMapping.toJson());
+            logger.info("Note mapping exported to {}", jsonPathStr);
+        } catch (Exception ex) {
+            logger.warn("Could not export note mapping", ex);
         }
     }
 }

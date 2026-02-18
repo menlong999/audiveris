@@ -293,6 +293,9 @@ public class PartwiseBuilder
     /** Maximum level number. */
     private static final int MAX_LEVEL_NUMBER = 16;
 
+    /** Default key mode when mode cannot be determined. */
+    private static final String DEFAULT_KEY_MODE = "major";
+
     //~ Instance fields ----------------------------------------------------------------------------
 
     /** The ScorePartwise instance to be populated. */
@@ -321,6 +324,30 @@ public class PartwiseBuilder
 
     /** Factory for ProxyMusic entities. */
     private final ObjectFactory factory = new ObjectFactory();
+
+    /** Note mapping collector for JSON export (optional). */
+    private NoteMapping noteMapping;
+
+    /** Global note counter across all parts. */
+    private int globalNoteCounter = 0;
+
+    /** Beam group counter for assigning unique IDs. */
+    private int beamGroupCounter = 0;
+
+    /** Map from BeamGroupInter to assigned ID. */
+    private final Map<BeamGroupInter, Integer> beamGroupIds = new HashMap<>();
+
+    /** Per-part note counters. */
+    private final Map<String, Integer> partNoteCounters = new HashMap<>();
+
+    /** Cumulative time offset tracking per part (in divisions). */
+    private final Map<String, Integer> partCumulativeTimeOffsets = new HashMap<>();
+
+    /** Cumulative time in seconds tracking per part. */
+    private final Map<String, Double> partCumulativeTimeSeconds = new HashMap<>();
+
+    /** Current tempo in BPM per part (defaults to 120). */
+    private final Map<String, Double> partCurrentTempo = new HashMap<>();
 
     //~ Constructors -------------------------------------------------------------------------------
 
@@ -1589,6 +1616,32 @@ public class PartwiseBuilder
                 final Sound sound = factory.createSound();
                 sound.setTempo(new BigDecimal(metro.getQuartersPerMinute()));
                 direction.setSound(sound);
+
+                // Collect tempo info for note mapping
+                if (noteMapping != null) {
+                    try {
+                        int timeOffsetInDivisions = 0;
+                        AbstractChordInter chord = current.note.getChord();
+                        if (chord != null) {
+                            Rational offset = chord.getTimeOffset();
+                            if (offset != null) {
+                                timeOffsetInDivisions = current.page.simpleDurationOf(offset);
+                            }
+                        }
+                        
+                        noteMapping.addTempo(new NoteMapping.TempoInfo(
+                            current.logicalPart.getPid(),
+                            current.pmMeasure.getNumber(),
+                            timeOffsetInDivisions,
+                            metro.getQuartersPerMinute(),
+                            metro.getNote().toMusicXml()));
+                        
+                        // Update current tempo for this part
+                        partCurrentTempo.put(current.logicalPart.getPid(), metro.getQuartersPerMinute());
+                    } catch (Exception ex) {
+                        logger.warn("Error collecting tempo info for note mapping", ex);
+                    }
+                }
             } else {
                 final FormattedTextId pmWords = factory.createFormattedTextId();
                 pmWords.setValue(content);
@@ -1757,6 +1810,19 @@ public class PartwiseBuilder
 
                     for (int index = 0; index < staffCount; index++) {
                         current.keys.put(index, key);
+                    }
+
+                    // Collect key signature info for note mapping (only for global keys)
+                    if (noteMapping != null && current.pmMeasure != null) {
+                        try {
+                            // Note: Mode detection (major/minor) is not currently implemented
+                            noteMapping.addKeySignature(new NoteMapping.KeySignatureInfo(
+                                current.logicalPart.getPid(),
+                                current.pmMeasure.getNumber(),
+                                keySignature.getFifths(), DEFAULT_KEY_MODE));
+                        } catch (Exception ex) {
+                            logger.warn("Error collecting key signature info for note mapping", ex);
+                        }
                     }
                 }
             } else {
@@ -2044,6 +2110,76 @@ public class PartwiseBuilder
                     // TODO
                     ///processTime(4,4,null);
                 }
+
+                // Collect measure info for note mapping
+                if (noteMapping != null && !current.repeatCopying && !measure.isDummy()) {
+                    try {
+                        String partId = current.logicalPart.getPid();
+                        String measureNum = current.pmMeasure.getNumber();
+                        int sheetNum = current.page.getSheet().getStub().getNumber();
+                        int sysIdx = current.page.getSystems().indexOf(current.system);
+                        
+                        // Calculate measure bounds
+                        Integer left = measure.getLeft();
+                        Integer right = measure.getRight();
+                        if (left != null && right != null) {
+                            List<Staff> staves = measure.getPart().getStaves();
+                            if (!staves.isEmpty()) {
+                                Staff firstStaff = staves.get(0);
+                                Staff lastStaff = staves.get(staves.size() - 1);
+                                int top = firstStaff.getFirstLine().yAt(left);
+                                int bottom = lastStaff.getLastLine().yAt(left);
+                                Rectangle measureBounds = new Rectangle(left, top, right - left, bottom - top);
+                                
+                                // Collect staff info
+                                List<NoteMapping.StaffInfo> staffInfos = new ArrayList<>();
+                                for (Staff staff : staves) {
+                                    int staffIdx = staff.getIndexInPart();
+                                    int staffTop = staff.getFirstLine().yAt(left);
+                                    int staffBottom = staff.getLastLine().yAt(left);
+                                    staffInfos.add(new NoteMapping.StaffInfo(staffIdx, staffTop, staffBottom));
+                                }
+                                
+                                // Get cumulative time offset for this measure
+                                Integer cumulativeOffset = partCumulativeTimeOffsets.get(partId);
+                                if (cumulativeOffset == null) {
+                                    cumulativeOffset = 0;
+                                    partCumulativeTimeOffsets.put(partId, 0);
+                                }
+                                
+                                // Get current tempo (default 120 BPM)
+                                Double currentTempo = partCurrentTempo.get(partId);
+                                if (currentTempo == null) {
+                                    currentTempo = 120.0;
+                                    partCurrentTempo.put(partId, currentTempo);
+                                }
+                                
+                                // Calculate cumulative time in seconds
+                                int divisions = current.page.simpleDurationOf(Rational.QUARTER);
+                                double cumulativeSeconds = 0;
+                                if (divisions > 0 && currentTempo > 0) {
+                                    cumulativeSeconds = (cumulativeOffset * 60.0) / (divisions * currentTempo);
+                                }
+                                
+                                // Calculate measure duration
+                                Rational measureDur = measure.getStack().getActualDuration();
+                                int measureDurInDivisions = (measureDur != null) ? current.page.simpleDurationOf(measureDur) : 0;
+                                double measureDurSeconds = 0;
+                                if (divisions > 0 && currentTempo > 0) {
+                                    measureDurSeconds = (measureDurInDivisions * 60.0) / (divisions * currentTempo);
+                                }
+                                
+                                noteMapping.addMeasure(new NoteMapping.MeasureInfo(
+                                    partId, measureNum, sheetNum, sysIdx,
+                                    cumulativeOffset, cumulativeSeconds,
+                                    measureDurInDivisions, measureDurSeconds,
+                                    measureBounds, staffInfos));
+                            }
+                        }
+                    } catch (Exception ex) {
+                        logger.warn("Error collecting measure info for note mapping", ex);
+                    }
+                }
             }
 
             // Clefs may be inserted further down the measure
@@ -2215,6 +2351,226 @@ public class PartwiseBuilder
         current.endMeasure();
         tupletNumbers.clear();
         isFirst.measure = false;
+
+        // Update cumulative time offset for note mapping
+        if (noteMapping != null && !current.repeatCopying && !measure.isDummy()) {
+            try {
+                String partId = current.logicalPart.getPid();
+                Integer cumulativeOffset = partCumulativeTimeOffsets.get(partId);
+                if (cumulativeOffset == null) {
+                    cumulativeOffset = 0;
+                }
+                
+                // Add this measure's duration to cumulative offset
+                Rational measureDur = measure.getStack().getActualDuration();
+                if (measureDur != null) {
+                    int measureDurInDivisions = current.page.simpleDurationOf(measureDur);
+                    partCumulativeTimeOffsets.put(partId, cumulativeOffset + measureDurInDivisions);
+                }
+            } catch (Exception ex) {
+                logger.warn("Error updating cumulative time offset for note mapping", ex);
+            }
+        }
+    }
+
+    //--------------------//
+    // collectNoteMapping //
+    //--------------------//
+    /**
+     * Collect note mapping data for the given note.
+     *
+     * @param note           the note inter
+     * @param chord          the containing chord
+     * @param staff          the staff
+     * @param isFirstInChord whether this is the first note in the chord
+     * @param isMeasureRest  whether this is a measure rest
+     */
+    private void collectNoteMapping (AbstractNoteInter note,
+                                    AbstractChordInter chord,
+                                    Staff staff,
+                                    boolean isFirstInChord,
+                                    boolean isMeasureRest)
+    {
+        try {
+            final SIGraph sig = note.getSig();
+            String partId = current.logicalPart.getPid();
+
+            // Get or initialize per-part note counter
+            Integer noteIndex = partNoteCounters.get(partId);
+            if (noteIndex == null) {
+                noteIndex = 0;
+            }
+            partNoteCounters.put(partId, noteIndex + 1);
+
+            // Positioning
+            int globalNoteIndex = globalNoteCounter++;
+            String measureNumber = current.pmMeasure.getNumber();
+            int staffNumber = 1 + staff.getIndexInPart();
+            String voiceId = (chord.getVoice() != null) ? "" + chord.getVoice().getId() : "1";
+            int noteIndexInChord = chord.getNotes().indexOf(note);
+            int sheetNumber = current.page.getSheet().getStub().getNumber();
+            int systemIndex = current.page.getSystems().indexOf(current.system);
+
+            // Note properties
+            boolean isRest = note.getShape().isRest();
+            boolean isGrace = note.getShape().isSmallHead();
+
+            // Pitch
+            String step = null;
+            int octave = 0;
+            int alter = 0;
+            int absolutePitch = 0;
+            int integerPitch = note.getIntegerPitch();
+            double expectedFrequency = 0.0;
+
+            if (!isRest) {
+                step = note.getStep().name();
+                octave = note.getOctave();
+                absolutePitch = note.getAbsolutePitch();
+                
+                // Get alteration
+                if (note instanceof HeadInter head) {
+                    Key key = current.keys.get(staff.getIndexInPart());
+                    Integer fifths = (key != null) ? key.getFifths().intValue() : null;
+                    alter = head.getAlteration(fifths);
+                }
+                
+                // Calculate expected frequency: 440 * 2^((pitch - 69) / 12)
+                expectedFrequency = 440.0 * Math.pow(2.0, (absolutePitch - 69) / 12.0);
+            }
+
+            // Duration/Type
+            String noteType = null;
+            if (!isMeasureRest) {
+                noteType = getNoteTypeName(note);
+            }
+            int dots = chord.getDotsNumber();
+            int stemDirection = 0;
+            if (chord.getStem() != null) {
+                Point tail = chord.getTailLocation();
+                stemDirection = (tail.y < note.getCenter().y) ? 1 : -1;
+            }
+
+            // Beam group ID
+            Integer beamGroupId = null;
+            BeamGroupInter beamGroup = chord.getBeamGroup();
+            if (beamGroup != null) {
+                beamGroupId = beamGroupIds.get(beamGroup);
+                if (beamGroupId == null) {
+                    beamGroupId = ++beamGroupCounter;
+                    beamGroupIds.put(beamGroup, beamGroupId);
+                }
+            }
+
+            // Time
+            int timeOffset = 0;
+            int duration = 0;
+            Rational timeOffsetRational = chord.getTimeOffset();
+            if (timeOffsetRational != null) {
+                timeOffset = current.page.simpleDurationOf(timeOffsetRational);
+            }
+
+            if (!isGrace) {
+                Rational dur;
+                if (chord.isMeasureRest()) {
+                    Rational measureDur = current.measure.getStack().getActualDuration();
+                    dur = (measureDur != null) ? measureDur : Rational.ONE;
+                } else {
+                    dur = chord.getDuration();
+                }
+                if (dur != null) {
+                    duration = current.page.simpleDurationOf(dur);
+                }
+            }
+
+            // Calculate time in seconds
+            Integer cumulativeOffset = partCumulativeTimeOffsets.get(partId);
+            if (cumulativeOffset == null) {
+                cumulativeOffset = 0;
+            }
+            Double currentTempo = partCurrentTempo.get(partId);
+            if (currentTempo == null) {
+                currentTempo = 120.0;
+            }
+            int divisions = current.page.simpleDurationOf(Rational.QUARTER);
+            double timeOffsetSeconds = ((cumulativeOffset + timeOffset) * 60.0) / (divisions * currentTempo);
+            double durationSeconds = (duration * 60.0) / (divisions * currentTempo);
+
+            // Tied duration (follow tie chain forward)
+            int tiedDuration = duration;
+            double tiedDurationSeconds = durationSeconds;
+            boolean isTiedStart = false;
+            boolean isTiedStop = false;
+
+            if (!isRest && note instanceof HeadInter head) {
+                for (Relation rel : sig.getRelations(head, SlurHeadRelation.class)) {
+                    SlurInter slur = (SlurInter) sig.getOppositeInter(head, rel);
+                    if (slur.isTie()) {
+                        if (slur.getHead(HorizontalSide.LEFT) == head) {
+                            isTiedStart = true;
+                            // Follow tie chain forward
+                            HeadInter currentHead = head;
+                            SlurInter currentSlur = slur;
+                            while (currentSlur != null && currentSlur.isTie()) {
+                                HeadInter nextHead = currentSlur.getHead(HorizontalSide.RIGHT);
+                                if (nextHead != null && nextHead != currentHead) {
+                                    AbstractChordInter nextChord = nextHead.getChord();
+                                    if (nextChord != null) {
+                                        Rational nextDur = nextChord.getDuration();
+                                        if (nextDur != null) {
+                                            int nextDurDiv = current.page.simpleDurationOf(nextDur);
+                                            tiedDuration += nextDurDiv;
+                                            tiedDurationSeconds += (nextDurDiv * 60.0) / (divisions * currentTempo);
+                                        }
+                                    }
+                                    // Look for next tie
+                                    currentHead = nextHead;
+                                    currentSlur = null;
+                                    for (Relation nextRel : sig.getRelations(currentHead, SlurHeadRelation.class)) {
+                                        SlurInter nextSlur = (SlurInter) sig.getOppositeInter(currentHead, nextRel);
+                                        if (nextSlur.isTie() && nextSlur.getHead(HorizontalSide.LEFT) == currentHead) {
+                                            currentSlur = nextSlur;
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                        if (slur.getHead(HorizontalSide.RIGHT) == head) {
+                            isTiedStop = true;
+                        }
+                    }
+                }
+            }
+
+            // Geometry
+            Rectangle bounds = note.getBounds();
+            Point center = note.getCenter();
+            Rectangle chordBounds = chord.getBounds();
+            int staffTopY = staff.getFirstLine().yAt(center.x);
+            int staffBottomY = staff.getLastLine().yAt(center.x);
+
+            // Set divisions in noteMapping if not already set
+            if (noteMapping.isEmpty()) {
+                noteMapping.setDivisions(divisions);
+            }
+
+            // Create and add note entry
+            NoteMapping.NoteEntry entry = new NoteMapping.NoteEntry(
+                noteIndex, globalNoteIndex, partId, measureNumber, staffNumber, voiceId,
+                noteIndexInChord, sheetNumber, systemIndex, isRest, isGrace, isMeasureRest,
+                isTiedStart, isTiedStop, step, octave, alter, absolutePitch, integerPitch,
+                expectedFrequency, noteType, dots, stemDirection, beamGroupId, timeOffset,
+                duration, timeOffsetSeconds, durationSeconds, tiedDuration, tiedDurationSeconds,
+                bounds, center, chordBounds, staffTopY, staffBottomY);
+
+            noteMapping.addNote(entry);
+
+        } catch (Exception ex) {
+            logger.warn("Error collecting note mapping for {} in {}", note, current.page, ex);
+        }
     }
 
     //-------------//
@@ -2603,6 +2959,11 @@ public class PartwiseBuilder
 
             // Everything is OK
             current.pmMeasure.getNoteOrBackupOrForward().add(current.pmNote);
+
+            // Collect note mapping data
+            if (noteMapping != null && !current.measure.isDummy() && !current.repeatCopying) {
+                collectNoteMapping(note, chord, staff, isFirstInChord, isMeasureRest);
+            }
         } catch (Exception ex) {
             logger.warn("Error visiting {} in {}", note, current.page, ex);
         }
@@ -3101,6 +3462,16 @@ public class PartwiseBuilder
         current.scale = page.getSheet().getScale();
         page.resetDurationDivisor();
 
+        // Collect sheet info for note mapping
+        if (noteMapping != null) {
+            try {
+                noteMapping.addSheet(new NoteMapping.SheetInfo(
+                    stub.getNumber(), sheet.getWidth(), sheet.getHeight()));
+            } catch (Exception ex) {
+                logger.warn("Error collecting sheet info for note mapping", ex);
+            }
+        }
+
         isFirst.page = score.isFirst(page);
         isFirst.system = true;
         isFirst.measure = true;
@@ -3151,6 +3522,20 @@ public class PartwiseBuilder
             current.system = system;
             current.multipleRests = system.getSig().inters(MultipleRestInter.class);
             isFirst.measure = true;
+
+            // Collect system info for note mapping
+            if (noteMapping != null) {
+                try {
+                    Rectangle sysBounds = system.getBounds();
+                    if (sysBounds != null) {
+                        int sysIdx = current.page.getSystems().indexOf(system);
+                        noteMapping.addSystem(new NoteMapping.SystemInfo(
+                            sysIdx, current.page.getSheet().getStub().getNumber(), sysBounds));
+                    }
+                } catch (Exception ex) {
+                    logger.warn("Error collecting system info for note mapping", ex);
+                }
+            }
 
             final Part systemPart = system.getPartById(current.logicalPart.getId());
 
@@ -3218,6 +3603,18 @@ public class PartwiseBuilder
 
         final List<Time> times = getAttributes().getTime();
         times.add(time);
+
+        // Collect time signature info for note mapping
+        if (noteMapping != null && current.pmMeasure != null) {
+            try {
+                noteMapping.addTimeSignature(new NoteMapping.TimeSignatureInfo(
+                    current.logicalPart.getPid(),
+                    current.pmMeasure.getNumber(),
+                    num, den));
+            } catch (Exception ex) {
+                logger.warn("Error collecting time signature info for note mapping", ex);
+            }
+        }
     }
 
     //---------------//
@@ -3480,6 +3877,30 @@ public class PartwiseBuilder
         return builder.scorePartwise;
     }
 
+    //--------------------//
+    // buildWithMapping   //
+    //--------------------//
+    /**
+     * Export a Score instance to a ScorePartwise and collect note mapping data.
+     *
+     * @param score the score to be exported
+     * @return BuildResult containing both ScorePartwise and NoteMapping
+     * @throws InterruptedException if the thread has been interrupted
+     * @throws ExecutionException   if a checked exception was thrown
+     */
+    public static BuildResult buildWithMapping (Score score)
+        throws InterruptedException, ExecutionException
+    {
+        Objects.requireNonNull(score, "Trying to export a null score");
+
+        final PartwiseBuilder builder = new PartwiseBuilder(score);
+        builder.noteMapping = new NoteMapping();
+
+        builder.processScore();
+
+        return new BuildResult(builder.scorePartwise, builder.noteMapping);
+    }
+
     //---------//
     // preload //
     //---------//
@@ -3491,6 +3912,34 @@ public class PartwiseBuilder
     }
 
     //~ Inner Classes ------------------------------------------------------------------------------
+
+    //-------------//
+    // BuildResult //
+    //-------------//
+    /**
+     * Container for build results with note mapping.
+     */
+    public static class BuildResult
+    {
+        /** The exported ScorePartwise. */
+        public final ScorePartwise scorePartwise;
+
+        /** The collected note mapping. */
+        public final NoteMapping noteMapping;
+
+        /**
+         * Create a BuildResult.
+         *
+         * @param scorePartwise the ScorePartwise
+         * @param noteMapping   the NoteMapping
+         */
+        public BuildResult (ScorePartwise scorePartwise,
+                           NoteMapping noteMapping)
+        {
+            this.scorePartwise = scorePartwise;
+            this.noteMapping = noteMapping;
+        }
+    }
 
     //---------------//
     // ClefIterators //

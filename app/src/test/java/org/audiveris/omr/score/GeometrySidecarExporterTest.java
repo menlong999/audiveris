@@ -72,6 +72,47 @@ public class GeometrySidecarExporterTest
         assertEquals(0, refs.get(2).path("musicXmlNoteOrdinal").asInt());
     }
 
+    @Test
+    public void testSidecarExportsStaffAndOmrProvenanceBindings ()
+        throws Exception
+    {
+        final NoteMapping mapping = new NoteMapping();
+        mapping.addSheet(new NoteMapping.SheetInfo(1, 1000, 1000));
+        mapping.addSystem(new NoteMapping.SystemInfo(0, 1, new Rectangle(0, 0, 1000, 400)));
+        mapping.addMeasure(
+                new NoteMapping.MeasureInfo(
+                        "P1",
+                        "1",
+                        1,
+                        0,
+                        0,
+                        0.0,
+                        4,
+                        1.0,
+                        new Rectangle(0, 0, 1000, 200),
+                        List.of(new NoteMapping.StaffInfo(1, 0, 100))));
+        mapping.addNote(noteWithProvenance());
+
+        final JsonNode root = new ObjectMapper().readTree(GeometrySidecarExporter.buildJson(mapping, null, null));
+        final JsonNode sidecarNote = root.path("pages").get(0).path("notes").get(0);
+        final JsonNode playbackRef = root.path("playback").path("noteRefs").get(0);
+
+        assertEquals(2, sidecarNote.path("semantic").path("staff").asInt());
+        assertEquals(2, playbackRef.path("semantic").path("staff").asInt());
+
+        assertEquals(101, sidecarNote.path("provenance").path("noteInterId").asInt());
+        assertEquals(202, sidecarNote.path("provenance").path("chordInterId").asInt());
+        assertEquals(303, sidecarNote.path("provenance").path("staffId").asInt());
+        assertEquals(404, sidecarNote.path("provenance").path("systemId").asInt());
+        assertEquals(505, sidecarNote.path("provenance").path("glyphId").asInt());
+
+        assertEquals(101, playbackRef.path("provenance").path("noteInterId").asInt());
+        assertEquals(202, playbackRef.path("provenance").path("chordInterId").asInt());
+        assertEquals(303, playbackRef.path("provenance").path("staffId").asInt());
+        assertEquals(404, playbackRef.path("provenance").path("systemId").asInt());
+        assertEquals(505, playbackRef.path("provenance").path("glyphId").asInt());
+    }
+
     private static NoteMapping.NoteEntry note (int noteIndex,
                                                int globalNoteIndex,
                                                String partId,
@@ -124,6 +165,56 @@ public class GeometrySidecarExporterTest
                 chordBounds,
                 y - 20,
                 y + 20);
+    }
+
+    private static NoteMapping.NoteEntry noteWithProvenance ()
+    {
+        final Rectangle noteBounds = new Rectangle(20, 40, 10, 10);
+        final Rectangle chordBounds = new Rectangle(18, 38, 14, 14);
+        final Point center = new Point(25, 45);
+
+        return new NoteMapping.NoteEntry(
+                0,
+                0,
+                "P1",
+                "1",
+                2,
+                "1",
+                0,
+                1,
+                0,
+                false,
+                false,
+                false,
+                false,
+                false,
+                "C",
+                4,
+                0,
+                60,
+                60,
+                440.0,
+                "quarter",
+                0,
+                0,
+                null,
+                0,
+                4,
+                0,
+                0.0,
+                0.5,
+                4,
+                0.5,
+                noteBounds,
+                center,
+                chordBounds,
+                20,
+                60,
+                101,
+                202,
+                303,
+                404,
+                505);
     }
 
     private static int midiForStep (String step)

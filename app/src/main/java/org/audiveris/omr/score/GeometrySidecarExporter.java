@@ -316,6 +316,7 @@ public final class GeometrySidecarExporter
                     note.partId,
                     note.measureNumber,
                     measure.measureIndex,
+                    note.staff,
                     note.sheetNumber,
                     note.systemIndex,
                     measure.measureId,
@@ -335,6 +336,11 @@ public final class GeometrySidecarExporter
                     noteHeadBox,
                     note.chordBounds,
                     note.bounds,
+                    note.noteInterId,
+                    note.chordInterId,
+                    note.staffId,
+                    note.systemId,
+                    note.glyphId,
                     Math.round(note.timeOffsetSeconds * 1000.0),
                     Math.round(note.durationSeconds * 1000.0));
 
@@ -547,6 +553,7 @@ public final class GeometrySidecarExporter
             sb.append(indent).append("      \"partId\": ").append(jsonString(note.partId)).append(",\n");
             sb.append(indent).append("      \"voice\": ").append(note.voice != null ? note.voice : "null").append(",\n");
             sb.append(indent).append("      \"voiceRaw\": ").append(jsonString(note.voiceRaw)).append(",\n");
+            sb.append(indent).append("      \"staff\": ").append(note.staff).append(",\n");
             sb.append(indent).append("      \"measureIndex\": ").append(note.measureIndex).append(",\n");
             sb.append(indent).append("      \"measureNumber\": ").append(jsonString(note.measureNumber)).append(",\n");
             sb.append(indent).append("      \"startDivision\": ").append(note.startDivision).append(",\n");
@@ -570,6 +577,8 @@ public final class GeometrySidecarExporter
             sb.append(indent).append("      \"globalNoteIndex\": ").append(note.globalNoteIndex).append(",\n");
             sb.append(indent).append("      \"noteIndex\": ").append(note.noteIndex).append("\n");
             sb.append(indent).append("    },\n");
+            appendProvenance(sb, note, indent + "    ");
+            sb.append(",\n");
             sb.append(indent).append("    \"sourceBBox\": ").append(toBoundsJson(note.sourceBBox)).append(",\n");
             sb.append(indent).append("    \"sourceNoteHeadBBox\": ").append(toBoundsJson(note.sourceNoteHeadBBox)).append("\n");
             sb.append(indent).append("  }");
@@ -627,6 +636,7 @@ public final class GeometrySidecarExporter
             sb.append(indent).append("        \"partId\": ").append(jsonString(note.partId)).append(",\n");
             sb.append(indent).append("        \"voice\": ").append(note.voice != null ? note.voice : "null").append(",\n");
             sb.append(indent).append("        \"voiceRaw\": ").append(jsonString(note.voiceRaw)).append(",\n");
+            sb.append(indent).append("        \"staff\": ").append(note.staff).append(",\n");
             sb.append(indent).append("        \"measureIndex\": ").append(note.measureIndex).append(",\n");
             sb.append(indent).append("        \"measureNumber\": ").append(jsonString(note.measureNumber)).append(",\n");
             sb.append(indent).append("        \"startDivision\": ").append(note.startDivision).append(",\n");
@@ -638,7 +648,9 @@ public final class GeometrySidecarExporter
             sb.append(indent).append("        \"start\": ").append(note.startMs).append(",\n");
             sb.append(indent).append("        \"duration\": ").append(note.durationMs).append(",\n");
             sb.append(indent).append("        \"confidence\": \"advisory\"\n");
-            sb.append(indent).append("      }\n");
+            sb.append(indent).append("      },\n");
+            appendProvenance(sb, note, indent + "      ");
+            sb.append("\n");
             sb.append(indent).append("    }");
             if (index < playableInPlaybackOrder.size() - 1) {
                 sb.append(",");
@@ -653,6 +665,19 @@ public final class GeometrySidecarExporter
     private static boolean isPlayable (NoteState note)
     {
         return (note != null) && !note.isRest && (note.midiPitch != null);
+    }
+
+    private static void appendProvenance (StringBuilder sb,
+                                          NoteState note,
+                                          String indent)
+    {
+        sb.append(indent).append("\"provenance\": {\n");
+        sb.append(indent).append("  \"noteInterId\": ").append(numberOrNull(note.noteInterId)).append(",\n");
+        sb.append(indent).append("  \"chordInterId\": ").append(numberOrNull(note.chordInterId)).append(",\n");
+        sb.append(indent).append("  \"staffId\": ").append(numberOrNull(note.staffId)).append(",\n");
+        sb.append(indent).append("  \"systemId\": ").append(numberOrNull(note.provenanceSystemId)).append(",\n");
+        sb.append(indent).append("  \"glyphId\": ").append(numberOrNull(note.glyphId)).append("\n");
+        sb.append(indent).append("}");
     }
 
     private static int voiceSortKey (NoteState note)
@@ -775,6 +800,11 @@ public final class GeometrySidecarExporter
                 .replace("\n", "\\n") + "\"";
     }
 
+    private static String numberOrNull (Integer value)
+    {
+        return (value != null) ? value.toString() : "null";
+    }
+
     private static String number (double value)
     {
         final String raw = String.format(Locale.US, "%.6f", value);
@@ -888,6 +918,7 @@ public final class GeometrySidecarExporter
         final String partId;
         final String measureNumber;
         final int measureIndex;
+        final int staff;
         final int sheetNumber;
         final int systemIndex;
         final String measureId;
@@ -907,6 +938,11 @@ public final class GeometrySidecarExporter
         final NormalizedRect noteHeadBBox;
         final NoteMapping.BoundsInfo sourceBBox;
         final NoteMapping.BoundsInfo sourceNoteHeadBBox;
+        final Integer noteInterId;
+        final Integer chordInterId;
+        final Integer staffId;
+        final Integer provenanceSystemId;
+        final Integer glyphId;
         final long startMs;
         final long durationMs;
 
@@ -916,6 +952,7 @@ public final class GeometrySidecarExporter
                    String partId,
                    String measureNumber,
                    int measureIndex,
+                   int staff,
                    int sheetNumber,
                    int systemIndex,
                    String measureId,
@@ -935,6 +972,11 @@ public final class GeometrySidecarExporter
                    NormalizedRect noteHeadBBox,
                    NoteMapping.BoundsInfo sourceBBox,
                    NoteMapping.BoundsInfo sourceNoteHeadBBox,
+                   Integer noteInterId,
+                   Integer chordInterId,
+                   Integer staffId,
+                   Integer provenanceSystemId,
+                   Integer glyphId,
                    long startMs,
                    long durationMs)
         {
@@ -944,6 +986,7 @@ public final class GeometrySidecarExporter
             this.partId = partId;
             this.measureNumber = measureNumber;
             this.measureIndex = measureIndex;
+            this.staff = staff;
             this.sheetNumber = sheetNumber;
             this.systemIndex = systemIndex;
             this.measureId = measureId;
@@ -963,6 +1006,11 @@ public final class GeometrySidecarExporter
             this.noteHeadBBox = noteHeadBBox;
             this.sourceBBox = sourceBBox;
             this.sourceNoteHeadBBox = sourceNoteHeadBBox;
+            this.noteInterId = noteInterId;
+            this.chordInterId = chordInterId;
+            this.staffId = staffId;
+            this.provenanceSystemId = provenanceSystemId;
+            this.glyphId = glyphId;
             this.startMs = startMs;
             this.durationMs = durationMs;
         }

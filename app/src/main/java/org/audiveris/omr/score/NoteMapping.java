@@ -362,7 +362,14 @@ public class NoteMapping
             sb.append("      \"center\": ").append(pointToJson(n.center)).append(",\n");
             sb.append("      \"chordBounds\": ").append(boundsToJson(n.chordBounds)).append(",\n");
             sb.append("      \"staffTopY\": ").append(n.staffTopY).append(",\n");
-            sb.append("      \"staffBottomY\": ").append(n.staffBottomY).append("\n");
+            sb.append("      \"staffBottomY\": ").append(n.staffBottomY).append(",\n");
+            sb.append("      \"provenance\": {\n");
+            sb.append("        \"noteInterId\": ").append(n.noteInterId != null ? n.noteInterId : "null").append(",\n");
+            sb.append("        \"chordInterId\": ").append(n.chordInterId != null ? n.chordInterId : "null").append(",\n");
+            sb.append("        \"staffId\": ").append(n.staffId != null ? n.staffId : "null").append(",\n");
+            sb.append("        \"systemId\": ").append(n.systemId != null ? n.systemId : "null").append(",\n");
+            sb.append("        \"glyphId\": ").append(n.glyphId != null ? n.glyphId : "null").append("\n");
+            sb.append("      }\n");
             sb.append("    }");
             if (i < notes.size() - 1) sb.append(",");
             sb.append("\n");
@@ -604,6 +611,13 @@ public class NoteMapping
         public final int sheetNumber;
         public final int systemIndex;
 
+        // OMR provenance
+        public final Integer noteInterId;
+        public final Integer chordInterId;
+        public final Integer staffId;
+        public final Integer systemId;
+        public final Integer glyphId;
+
         // Note properties
         public final boolean isRest;
         public final boolean isGrace;
@@ -652,6 +666,63 @@ public class NoteMapping
                          double tiedDurationSeconds, Rectangle bounds, Point center,
                          Rectangle chordBounds, int staffTopY, int staffBottomY)
         {
+            this(
+                    noteIndex,
+                    globalNoteIndex,
+                    partId,
+                    measureNumber,
+                    staff,
+                    voice,
+                    noteIndexInChord,
+                    sheetNumber,
+                    systemIndex,
+                    isRest,
+                    isGrace,
+                    isMeasureRest,
+                    isTiedStart,
+                    isTiedStop,
+                    step,
+                    octave,
+                    alter,
+                    absolutePitch,
+                    integerPitch,
+                    expectedFrequency,
+                    noteType,
+                    dots,
+                    stemDirection,
+                    beamGroupId,
+                    timeOffset,
+                    duration,
+                    measureCumulativeTimeOffset,
+                    timeOffsetSeconds,
+                    durationSeconds,
+                    tiedDuration,
+                    tiedDurationSeconds,
+                    bounds,
+                    center,
+                    chordBounds,
+                    staffTopY,
+                    staffBottomY,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null);
+        }
+
+        public NoteEntry (int noteIndex, int globalNoteIndex, String partId, String measureNumber,
+                         int staff, String voice, int noteIndexInChord, int sheetNumber,
+                         int systemIndex, boolean isRest, boolean isGrace, boolean isMeasureRest,
+                         boolean isTiedStart, boolean isTiedStop, String step, int octave,
+                         int alter, int absolutePitch, int integerPitch, double expectedFrequency,
+                         String noteType, int dots, int stemDirection, Integer beamGroupId,
+                         int timeOffset, int duration, int measureCumulativeTimeOffset,
+                         double timeOffsetSeconds, double durationSeconds, int tiedDuration,
+                         double tiedDurationSeconds, Rectangle bounds, Point center,
+                         Rectangle chordBounds, int staffTopY, int staffBottomY,
+                         Integer noteInterId, Integer chordInterId, Integer staffId,
+                         Integer systemId, Integer glyphId)
+        {
             this.noteIndex = noteIndex;
             this.globalNoteIndex = globalNoteIndex;
             this.partId = partId;
@@ -661,6 +732,11 @@ public class NoteMapping
             this.noteIndexInChord = noteIndexInChord;
             this.sheetNumber = sheetNumber;
             this.systemIndex = systemIndex;
+            this.noteInterId = noteInterId;
+            this.chordInterId = chordInterId;
+            this.staffId = staffId;
+            this.systemId = systemId;
+            this.glyphId = glyphId;
             this.isRest = isRest;
             this.isGrace = isGrace;
             this.isMeasureRest = isMeasureRest;

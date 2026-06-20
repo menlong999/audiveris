@@ -2460,6 +2460,11 @@ public class PartwiseBuilder
         }
     }
 
+    private static Integer positiveId (int id)
+    {
+        return (id > 0) ? id : null;
+    }
+
     //--------------------//
     // collectNoteMapping //
     //--------------------//
@@ -2646,6 +2651,12 @@ public class PartwiseBuilder
                 noteMapping.setDivisions(divisions);
             }
 
+            final Integer noteInterId = positiveId(note.getId());
+            final Integer chordInterId = (chord != null) ? positiveId(chord.getId()) : null;
+            final Integer staffId = (staff != null) ? positiveId(staff.getId()) : null;
+            final Integer systemId = (current.system != null) ? positiveId(current.system.getId()) : null;
+            final Integer glyphId = (note.getGlyph() != null) ? positiveId(note.getGlyph().getId()) : null;
+
             // Create and add note entry
             NoteMapping.NoteEntry entry = new NoteMapping.NoteEntry(
                 noteIndex, globalNoteIndex, partId, measureNumber, staffNumber, voiceId,
@@ -2654,7 +2665,7 @@ public class PartwiseBuilder
                 expectedFrequency, noteType, dots, stemDirection, beamGroupId, timeOffset,
                 duration, measureCumulativeTimeOffset, timeOffsetSeconds, durationSeconds,
                 tiedDuration, tiedDurationSeconds, bounds, center, chordBounds, staffTopY,
-                staffBottomY);
+                staffBottomY, noteInterId, chordInterId, staffId, systemId, glyphId);
 
             noteMapping.addNote(entry);
 

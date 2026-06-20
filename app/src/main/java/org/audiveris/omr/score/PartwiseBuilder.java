@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -36,6 +36,8 @@ import static org.audiveris.omr.score.MusicXML.*;
 import org.audiveris.omr.sheet.Book;
 import org.audiveris.omr.sheet.Part;
 import org.audiveris.omr.sheet.PartBarline;
+import org.audiveris.omr.sheet.ProcessingSwitch;
+import org.audiveris.omr.sheet.ProcessingSwitches;
 import org.audiveris.omr.sheet.Scale;
 import org.audiveris.omr.sheet.Sheet;
 import org.audiveris.omr.sheet.SheetStub;
@@ -78,6 +80,7 @@ import org.audiveris.omr.sig.inter.OrnamentInter;
 import org.audiveris.omr.sig.inter.PedalInter;
 import org.audiveris.omr.sig.inter.PlayingInter;
 import org.audiveris.omr.sig.inter.PluckingInter;
+import org.audiveris.omr.sig.inter.RehearsalInter;
 import org.audiveris.omr.sig.inter.RestChordInter;
 import org.audiveris.omr.sig.inter.SentenceInter;
 import org.audiveris.omr.sig.inter.SlurInter;
@@ -137,6 +140,7 @@ import org.audiveris.proxymusic.DirectionType;
 import org.audiveris.proxymusic.Dynamics;
 import org.audiveris.proxymusic.Empty;
 import org.audiveris.proxymusic.EmptyPlacement;
+import org.audiveris.proxymusic.EnclosureShape;
 import org.audiveris.proxymusic.Encoding;
 import org.audiveris.proxymusic.Ending;
 import org.audiveris.proxymusic.Fermata;
@@ -2251,13 +2255,23 @@ public class PartwiseBuilder
             // Clefs may be inserted further down the measure
             final ClefIterators clefIters = new ClefIterators(measure);
 
+            // Wedges are collected and sorted for the whole measure
+            final WedgeIterators wedgeIters = new WedgeIterators(measure);
+
             // Insert clefs that occur before the first time slot
             final List<Slot> slots = stack.getSlots();
 
             if (slots.isEmpty()) {
                 clefIters.push(null, null);
+                wedgeIters.push(Rational.ZERO);
             } else {
                 clefIters.push(slots.get(0).getXOffset(), null);
+                wedgeIters.push(Rational.ZERO);
+            }
+
+            // Rehearsal mark?
+            for (RehearsalInter rehearsal : measure.getRehearsals()) {
+                processRehearsal(rehearsal);
             }
 
             // Now voice per voice
@@ -2276,6 +2290,7 @@ public class PartwiseBuilder
                     // Delegate to the chord children directly
                     AbstractChordInter chord = voice.getWholeChord();
                     clefIters.push(measure.getWidth(), chord.getTopStaff());
+                    wedgeIters.push(chord.getTimeOffset());
                     processChord(chord);
 
                     if (stack.getActualDuration() != null) {
@@ -2297,6 +2312,9 @@ public class PartwiseBuilder
                                 insertForward(timeOffset.minus(timeCounter), chord);
                                 timeCounter = timeOffset;
                             }
+
+                            // Wedge events occurring at this time offset?
+                            wedgeIters.push(timeOffset);
 
                             // Grace chord(s) before this chord?
                             if (chord instanceof HeadChordInter headChord) {
@@ -2338,6 +2356,9 @@ public class PartwiseBuilder
 
             // Clefs that occur after time slots, if any
             clefIters.push(null, null);
+
+            // Wedges that occur after time slots, if any
+            wedgeIters.push(null);
 
             // Right Barline
             if (!measure.isDummy()) {
@@ -2673,9 +2694,6 @@ public class PartwiseBuilder
                             processBow((BowInter) other);
                         } else if (rel instanceof ChordPedalRelation) {
                             processPedal((PedalInter) other);
-                        } else if (rel instanceof ChordWedgeRelation chordWedgeRelation) {
-                            HorizontalSide side = chordWedgeRelation.getSide();
-                            processWedge((WedgeInter) other, side);
                         } else if (rel instanceof ChordDynamicsRelation) {
                             processDynamics((DynamicsInter) other);
                         } else if (rel instanceof ChordArticulationRelation) {
@@ -3218,6 +3236,50 @@ public class PartwiseBuilder
         }
     }
 
+    //------------------//
+    // processRehearsal //
+    //------------------//
+    private void processRehearsal (RehearsalInter rehearsal)
+    {
+        try {
+            logger.debug("Visiting {}", rehearsal);
+
+            final Staff staff = rehearsal.getStaff();
+            final String content = rehearsal.getValue();
+            final Direction direction = new Direction();
+            final Point2D location = rehearsal.getLocation();
+
+            final DirectionType directionType = new DirectionType();
+            direction.getDirectionType().add(directionType);
+
+            // Placement
+            direction.setPlacement(AboveBelow.ABOVE);
+
+            final FormattedTextId fti = factory.createFormattedTextId();
+            fti.setValue(content);
+
+            if (rehearsal.getEnclosure() != null) {
+                fti.setEnclosure(EnclosureShape.RECTANGLE);
+            }
+
+            // default-y
+            fti.setDefaultY(yOf(location, staff));
+
+            // relative-x
+            fti.setRelativeX(toTenths(location.getX() - current.measure.getAbscissa(LEFT, staff)));
+
+            // Font information
+            setFontInfo(fti, rehearsal);
+            fti.setFontWeight(FontWeight.BOLD); // Enforce bold for rehearsals!
+
+            directionType.getRehearsal().add(fti);
+
+            current.pmMeasure.getNoteOrBackupOrForward().add(direction);
+        } catch (Exception ex) {
+            logger.warn("Error visiting {} in {}", rehearsal, current.page, ex);
+        }
+    }
+
     //--------------//
     // processScore //
     //--------------//
@@ -3400,6 +3462,7 @@ public class PartwiseBuilder
 
                 default -> {
                     // LyricItem, Direction, Metronome, ChordName are handled through related Note
+                    // Rehearsal is handled directly through its containing measure
                     return;
                 }
             }
@@ -3741,7 +3804,8 @@ public class PartwiseBuilder
     // processWedge //
     //--------------//
     private void processWedge (WedgeInter wedge,
-                               HorizontalSide side)
+                               HorizontalSide side,
+                               AbstractNoteInter referenceNote)
     {
         try {
             logger.debug("Visiting {}", wedge);
@@ -3754,7 +3818,7 @@ public class PartwiseBuilder
             pmWedge.setSpread(toTenths(wedge.getSpread(side)));
 
             // Staff?
-            Staff staff = current.note.getStaff();
+            Staff staff = referenceNote.getStaff();
             insertStaffId(direction, staff);
 
             // Start or stop?
@@ -3774,7 +3838,7 @@ public class PartwiseBuilder
 
                 // Placement
                 direction.setPlacement(
-                        (refPoint.getY() < current.note.getCenter().y) ? AboveBelow.ABOVE
+                        (refPoint.getY() < referenceNote.getCenter().y) ? AboveBelow.ABOVE
                                 : AboveBelow.BELOW);
 
                 // default-y
@@ -3790,7 +3854,7 @@ public class PartwiseBuilder
             }
 
             // default-x using note left side (No offset for the time being)
-            pmWedge.setDefaultX(toTenths(refPoint.getX() - current.note.getCenterLeft().x));
+            pmWedge.setDefaultX(toTenths(refPoint.getX() - referenceNote.getCenterLeft().x));
 
             // Everything is OK
             directionType.setWedge(pmWedge);
@@ -4099,6 +4163,113 @@ public class PartwiseBuilder
                     while (it.hasNext()) {
                         processClef(it.next());
                     }
+                }
+            }
+        }
+    }
+
+    //------------//
+    // TimedWedge //
+    //------------//
+    /**
+     * Helper class to keep track of a wedge event (start or stop) and its timing.
+     */
+    private static class TimedWedge
+    {
+        final WedgeInter wedge;
+
+        final HorizontalSide side;
+
+        final AbstractNoteInter referenceNote;
+
+        final Rational timeOffset;
+
+        TimedWedge (WedgeInter wedge,
+                    HorizontalSide side,
+                    AbstractNoteInter referenceNote,
+                    Rational timeOffset)
+        {
+            this.wedge = wedge;
+            this.side = side;
+            this.referenceNote = referenceNote;
+            this.timeOffset = timeOffset;
+        }
+    }
+
+    //----------------//
+    // WedgeIterators //
+    //----------------//
+    /**
+     * Class to handle the insertion of wedges in a measure.
+     * Wedges are collected for the whole measure and sorted by time offset,
+     * to ensure that a wedge 'stop' never occurs before a 'start' in the MusicXML stream,
+     * even if they are linked to different voices.
+     */
+    private class WedgeIterators
+    {
+        /** Sorted list of wedge events in this measure. */
+        private final List<TimedWedge> events = new ArrayList<>();
+
+        /** Iterator on events. */
+        private ListIterator<TimedWedge> it;
+
+        WedgeIterators (Measure measure)
+        {
+            final SIGraph sig = measure.getStack().getSystem().getSig();
+
+            for (Inter inter : sig.inters(WedgeInter.class)) {
+                WedgeInter wedge = (WedgeInter) inter;
+
+                for (HorizontalSide side : HorizontalSide.values()) {
+                    AbstractChordInter chord = wedge.getChord(side);
+
+                    if ((chord != null) && (chord.getMeasure() == measure)) {
+                        // We take the first note of the chord as reference
+                        AbstractNoteInter refNote = (AbstractNoteInter) chord.getNotes().get(0);
+                        events.add(new TimedWedge(wedge, side, refNote, chord.getTimeOffset()));
+                    }
+                }
+            }
+
+            // Sort by time offset, and for same offset, ensure START (LEFT) comes before STOP (RIGHT)
+            Collections.sort(events, (w1, w2) -> {
+                int cmp = w1.timeOffset.compareTo(w2.timeOffset);
+                if (cmp != 0) {
+                    return cmp;
+                }
+                if (w1.side == w2.side) {
+                    return 0;
+                }
+                return (w1.side == LEFT) ? -1 : 1;
+            });
+
+            it = events.listIterator();
+        }
+
+        /**
+         * Push as far as possible the relevant wedge events, according to the
+         * current time offset.
+         *
+         * @param timeOffset the time offset of the current position in measure
+         */
+        public void push (Rational timeOffset)
+        {
+            if (timeOffset != null) {
+                while (it.hasNext()) {
+                    TimedWedge event = it.next();
+
+                    if (event.timeOffset.compareTo(timeOffset) <= 0) {
+                        processWedge(event.wedge, event.side, event.referenceNote);
+                    } else {
+                        it.previous();
+                        break;
+                    }
+                }
+            } else {
+                // Flush all remaining events
+                while (it.hasNext()) {
+                    TimedWedge event = it.next();
+                    processWedge(event.wedge, event.side, event.referenceNote);
                 }
             }
         }

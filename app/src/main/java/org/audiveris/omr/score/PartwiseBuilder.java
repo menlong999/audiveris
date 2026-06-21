@@ -2182,6 +2182,7 @@ public class PartwiseBuilder
                             int bottom = Integer.MIN_VALUE;
 
                             List<NoteMapping.StaffInfo> staffInfos = new ArrayList<>();
+                            List<Integer> staffIds = new ArrayList<>();
                             for (Staff staff : staves) {
                                 final int staffLeft = measure.getAbscissa(LEFT, staff);
                                 final int staffRight = measure.getAbscissa(RIGHT, staff);
@@ -2201,6 +2202,7 @@ public class PartwiseBuilder
                                         staff.getIndexInPart(),
                                         staffTop,
                                         staffBottom));
+                                staffIds.add(staff.getId());
                             }
 
                             if (left <= right && top <= bottom) {
@@ -2243,7 +2245,13 @@ public class PartwiseBuilder
                                         partId, measureNum, sheetNum, sysIdx,
                                         cumulativeOffset, cumulativeSeconds,
                                         measureDurInDivisions, measureDurSeconds,
-                                        measureBounds, staffInfos));
+                                        measureBounds, staffInfos,
+                                        current.system.getStacks().indexOf(stack),
+                                        stack.getPageId(),
+                                        stack.getScoreId(current.pageMeasureIdOffset),
+                                        current.system.getId(),
+                                        sysIdx,
+                                        staffIds));
                             }
                         }
                     } catch (Exception ex) {

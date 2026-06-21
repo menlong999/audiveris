@@ -113,6 +113,118 @@ public class GeometrySidecarExporterTest
         assertEquals(505, playbackRef.path("provenance").path("glyphId").asInt());
     }
 
+    @Test
+    public void testSidecarExportsOrdinalChordPhysicalAndRejectEvidence ()
+        throws Exception
+    {
+        final NoteMapping mapping = new NoteMapping();
+        mapping.addSheet(new NoteMapping.SheetInfo(1, 1000, 1000));
+        mapping.addSystem(new NoteMapping.SystemInfo(0, 1, new Rectangle(0, 0, 1000, 400)));
+        mapping.addMeasure(
+                new NoteMapping.MeasureInfo(
+                        "P1",
+                        "1",
+                        1,
+                        0,
+                        0,
+                        0.0,
+                        4,
+                        1.0,
+                        new Rectangle(0, 0, 500, 200),
+                        List.of(new NoteMapping.StaffInfo(1, 0, 100))));
+        mapping.addMeasure(
+                new NoteMapping.MeasureInfo(
+                        "P1",
+                        "2",
+                        1,
+                        0,
+                        4,
+                        1.0,
+                        4,
+                        1.0,
+                        new Rectangle(500, 0, 500, 200),
+                        List.of(new NoteMapping.StaffInfo(1, 0, 100))));
+
+        mapping.addNote(evidenceNote(0, 0, "1", 0, 0, true, null, 100, 200));
+        mapping.addNote(evidenceNote(1, 1, "1", 0, 0, false, "C", 101, 202));
+        mapping.addNote(evidenceNote(2, 2, "1", 0, 1, false, "E", 102, 202));
+        mapping.addNote(evidenceNote(3, 3, "2", 4, 0, false, "G", 103, 203));
+        mapping.addNote(evidenceNote(4, 4, "99", 8, 0, false, "B", 104, 204));
+
+        final JsonNode root = new ObjectMapper().readTree(GeometrySidecarExporter.buildJson(mapping, null, null));
+        final JsonNode notes = root.path("pages").get(0).path("notes");
+
+        assertEquals(4, notes.size());
+
+        final JsonNode rest = notes.get(0);
+        assertTrue(rest.has("musicXml"));
+        assertEquals("P1", rest.path("musicXml").path("xmlPartId").asText());
+        assertEquals(0, rest.path("musicXml").path("xmlMeasureIndex").asInt());
+        assertEquals("1", rest.path("musicXml").path("xmlMeasureNumber").asText());
+        assertEquals(0, rest.path("musicXml").path("xmlNoteOrdinal").asInt());
+        assertEquals(0, rest.path("musicXml").path("xmlNoteOrdinalInMeasure").asInt());
+        assertTrue(rest.path("musicXml").path("playableOrdinalInPart").isNull());
+        assertEquals(0, rest.path("physical").path("physicalMeasureIndex").asInt());
+        assertEquals("1", rest.path("physical").path("measureStackScoreId").asText());
+
+        final JsonNode chordRoot = notes.get(1);
+        assertEquals(1, chordRoot.path("musicXml").path("xmlNoteOrdinal").asInt());
+        assertEquals(1, chordRoot.path("musicXml").path("xmlNoteOrdinalInMeasure").asInt());
+        assertEquals(0, chordRoot.path("musicXml").path("playableOrdinalInPart").asInt());
+
+        final JsonNode chordMember = notes.get(2);
+        assertEquals(2, chordMember.path("musicXml").path("xmlNoteOrdinal").asInt());
+        assertEquals(2, chordMember.path("musicXml").path("xmlNoteOrdinalInMeasure").asInt());
+        assertEquals(1, chordMember.path("musicXml").path("playableOrdinalInPart").asInt());
+
+        final JsonNode secondMeasureNote = notes.get(3);
+        assertEquals(1, secondMeasureNote.path("musicXml").path("xmlMeasureIndex").asInt());
+        assertEquals("2", secondMeasureNote.path("musicXml").path("xmlMeasureNumber").asText());
+        assertEquals(0, secondMeasureNote.path("musicXml").path("xmlNoteOrdinalInMeasure").asInt());
+        assertEquals(2, secondMeasureNote.path("musicXml").path("playableOrdinalInPart").asInt());
+
+        final JsonNode playbackRef = root.path("playback").path("noteRefs").get(0);
+        assertEquals("note-1", playbackRef.path("noteId").asText());
+        assertEquals(1, playbackRef.path("musicXml").path("xmlNoteOrdinal").asInt());
+        assertEquals(0, playbackRef.path("musicXml").path("playableOrdinalInPart").asInt());
+        assertEquals(0, playbackRef.path("physical").path("physicalMeasureIndex").asInt());
+
+        final JsonNode measures = root.path("pages").get(0).path("measures");
+        assertEquals("bound", measures.get(0).path("bindingStatus").asText());
+        assertEquals("1", measures.get(0).path("physical").path("measureStackId").asText());
+        assertEquals("P1", measures.get(0).path("musicXml").path("xmlPartId").asText());
+
+        final JsonNode chord = findChord(root.path("chords"), 202);
+        assertEquals(202, chord.path("chordInterId").asInt());
+        assertEquals(101, chord.path("rootNoteInterId").asInt());
+        assertEquals(2, chord.path("memberNoteInterIds").size());
+        assertEquals(101, chord.path("memberNoteInterIds").get(0).asInt());
+        assertEquals(102, chord.path("memberNoteInterIds").get(1).asInt());
+        assertEquals("root", chord.path("exportedXmlOrdinals").get(0).path("chordRole").asText());
+        assertEquals("member", chord.path("exportedXmlOrdinals").get(1).path("chordRole").asText());
+        assertEquals("same-chord-inter", chord.path("sameOnset").path("evidence").asText());
+
+        final JsonNode reject = root.path("bindingDiagnostics").path("rejects").get(0);
+        assertEquals("measure-unresolved", reject.path("reason").asText());
+        assertEquals("note", reject.path("objectType").asText());
+        assertEquals(104, reject.path("noteInterId").asInt());
+        assertEquals(204, reject.path("chordInterId").asInt());
+        assertEquals("P1", reject.path("partId").asText());
+        assertEquals("99", reject.path("xmlMeasureNumber").asText());
+    }
+
+    private static JsonNode findChord (JsonNode chords,
+                                       int chordInterId)
+    {
+        for (JsonNode chord : chords) {
+            if (chord.path("chordInterId").asInt() == chordInterId) {
+                return chord;
+            }
+        }
+
+        throw new AssertionError("Missing chordInterId " + chordInterId);
+    }
+
     private static NoteMapping.NoteEntry note (int noteIndex,
                                                int globalNoteIndex,
                                                String partId,
@@ -215,6 +327,66 @@ public class GeometrySidecarExporterTest
                 303,
                 404,
                 505);
+    }
+
+    private static NoteMapping.NoteEntry evidenceNote (int noteIndex,
+                                                       int globalNoteIndex,
+                                                       String measureNumber,
+                                                       int measureCumulativeTimeOffset,
+                                                       int noteIndexInChord,
+                                                       boolean isRest,
+                                                       String step,
+                                                       int noteInterId,
+                                                       int chordInterId)
+    {
+        final int x = 20 + (globalNoteIndex * 20);
+        final int y = 40;
+        final Rectangle noteBounds = new Rectangle(x, y, 10, 10);
+        final Rectangle chordBounds = new Rectangle(x - 2, y - 2, 14, 14);
+        final Point center = new Point(x + 5, y + 5);
+
+        return new NoteMapping.NoteEntry(
+                noteIndex,
+                globalNoteIndex,
+                "P1",
+                measureNumber,
+                1,
+                "1",
+                noteIndexInChord,
+                1,
+                0,
+                isRest,
+                false,
+                false,
+                false,
+                false,
+                step,
+                isRest ? 0 : 4,
+                0,
+                isRest ? 0 : midiForStep(step),
+                isRest ? 0 : midiForStep(step),
+                isRest ? 0.0 : 440.0,
+                "quarter",
+                0,
+                0,
+                null,
+                0,
+                4,
+                measureCumulativeTimeOffset,
+                0.0,
+                0.5,
+                4,
+                0.5,
+                noteBounds,
+                center,
+                chordBounds,
+                y - 20,
+                y + 20,
+                noteInterId,
+                chordInterId,
+                303,
+                404,
+                505 + globalNoteIndex);
     }
 
     private static int midiForStep (String step)

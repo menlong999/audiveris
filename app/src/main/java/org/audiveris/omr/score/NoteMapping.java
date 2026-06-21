@@ -301,6 +301,23 @@ public class NoteMapping
             sb.append("      \"cumulativeTimeSeconds\": ").append(m.cumulativeTimeSeconds).append(",\n");
             sb.append("      \"measureDuration\": ").append(m.measureDuration).append(",\n");
             sb.append("      \"measureDurationSeconds\": ").append(m.measureDurationSeconds).append(",\n");
+            sb.append("      \"physicalMeasureIndex\": ")
+                    .append(m.physicalMeasureIndex != null ? m.physicalMeasureIndex : "null")
+                    .append(",\n");
+            sb.append("      \"measureStackId\": ").append(jsonString(m.measureStackId)).append(",\n");
+            sb.append("      \"measureStackScoreId\": ").append(jsonString(m.measureStackScoreId)).append(",\n");
+            sb.append("      \"systemId\": ")
+                    .append(m.systemId != null ? m.systemId : "null")
+                    .append(",\n");
+            sb.append("      \"systemOrderInPage\": ")
+                    .append(m.systemOrderInPage != null ? m.systemOrderInPage : "null")
+                    .append(",\n");
+            sb.append("      \"staffIds\": [");
+            for (int j = 0; j < m.staffIds.size(); j++) {
+                if (j > 0) sb.append(", ");
+                sb.append(m.staffIds.get(j));
+            }
+            sb.append("],\n");
             sb.append("      \"bounds\": ").append(boundsToJson(m.bounds)).append(",\n");
             sb.append("      \"staves\": [\n");
             for (int j = 0; j < m.staves.size(); j++) {
@@ -467,11 +484,44 @@ public class NoteMapping
         public final double measureDurationSeconds;
         public final BoundsInfo bounds;
         public final List<StaffInfo> staves;
+        public final Integer physicalMeasureIndex;
+        public final String measureStackId;
+        public final String measureStackScoreId;
+        public final Integer systemId;
+        public final Integer systemOrderInPage;
+        public final List<Integer> staffIds;
 
         public MeasureInfo (String partId, String measureNumber, int sheetNumber, int systemIndex,
                            int cumulativeTimeOffset, double cumulativeTimeSeconds,
                            int measureDuration, double measureDurationSeconds,
                            Rectangle bounds, List<StaffInfo> staves)
+        {
+            this(
+                    partId,
+                    measureNumber,
+                    sheetNumber,
+                    systemIndex,
+                    cumulativeTimeOffset,
+                    cumulativeTimeSeconds,
+                    measureDuration,
+                    measureDurationSeconds,
+                    bounds,
+                    staves,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    List.of());
+        }
+
+        public MeasureInfo (String partId, String measureNumber, int sheetNumber, int systemIndex,
+                           int cumulativeTimeOffset, double cumulativeTimeSeconds,
+                           int measureDuration, double measureDurationSeconds,
+                           Rectangle bounds, List<StaffInfo> staves,
+                           Integer physicalMeasureIndex, String measureStackId,
+                           String measureStackScoreId, Integer systemId,
+                           Integer systemOrderInPage, List<Integer> staffIds)
         {
             this.partId = partId;
             this.measureNumber = measureNumber;
@@ -483,6 +533,12 @@ public class NoteMapping
             this.measureDurationSeconds = measureDurationSeconds;
             this.bounds = new BoundsInfo(bounds);
             this.staves = staves;
+            this.physicalMeasureIndex = physicalMeasureIndex;
+            this.measureStackId = measureStackId;
+            this.measureStackScoreId = measureStackScoreId;
+            this.systemId = systemId;
+            this.systemOrderInPage = systemOrderInPage;
+            this.staffIds = (staffIds != null) ? List.copyOf(staffIds) : List.of();
         }
     }
 

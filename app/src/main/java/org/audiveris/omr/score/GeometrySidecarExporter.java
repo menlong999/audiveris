@@ -93,11 +93,17 @@ public final class GeometrySidecarExporter
         final String sourceKind = detectSourceKind(inputPath);
         final Map<Integer, SourcePageInfo> sourcePages = resolveSourcePages(inputPath, sourceKind, sheetByNumber);
         final Map<String, Integer> measureIndexByKey = buildMeasureIndexMap(measures);
+        final BindingDiagnostics diagnostics = new BindingDiagnostics();
         final Map<String, MeasureState> measureStateByKey = buildMeasureStates(
                 measures,
                 measureIndexByKey,
                 sheetByNumber);
-        final List<NoteState> noteStates = buildNoteStates(notes, measureStateByKey, sheetByNumber);
+        final List<NoteState> noteStates = buildNoteStates(
+                notes,
+                measureStateByKey,
+                sheetByNumber,
+                diagnostics);
+        final Map<String, Integer> playableOrdinalByNoteId = buildPlayableOrdinalByNoteId(noteStates);
 
         final StringBuilder sb = new StringBuilder(32_768);
         sb.append("{\n");
@@ -160,7 +166,7 @@ public final class GeometrySidecarExporter
             sb.append(",\n");
             appendMeasures(sb, pageMeasures, "      ");
             sb.append(",\n");
-            appendNotes(sb, pageNotes, "      ");
+            appendNotes(sb, pageNotes, playableOrdinalByNoteId, "      ");
             sb.append("\n");
             sb.append("    }");
             if (pageIdx < pageNumbers.size() - 1) {
@@ -170,7 +176,11 @@ public final class GeometrySidecarExporter
         }
 
         sb.append("  ],\n");
-        appendPlayback(sb, noteStates, "  ");
+        appendPlayback(sb, noteStates, playableOrdinalByNoteId, "  ");
+        sb.append(",\n");
+        appendChords(sb, noteStates, "  ");
+        sb.append(",\n");
+        appendBindingDiagnostics(sb, diagnostics, "  ");
         sb.append("\n");
         sb.append("}\n");
 
@@ -274,6 +284,12 @@ public final class GeometrySidecarExporter
                     measure.systemIndex,
                     measureIndex,
                     measure.cumulativeTimeOffset,
+                    measure.physicalMeasureIndex != null ? measure.physicalMeasureIndex : measureIndex,
+                    measure.measureStackId != null ? measure.measureStackId : measure.measureNumber,
+                    measure.measureStackScoreId != null ? measure.measureStackScoreId : measure.measureNumber,
+                    measure.systemId,
+                    measure.systemOrderInPage != null ? measure.systemOrderInPage : measure.systemIndex,
+                    measure.staffIds,
                     normalize(measure.bounds, sheet.imageWidth, sheet.imageHeight),
                     measure.bounds,
                     new ArrayList<>()));
@@ -284,16 +300,24 @@ public final class GeometrySidecarExporter
 
     private static List<NoteState> buildNoteStates (List<NoteMapping.NoteEntry> notes,
                                                     Map<String, MeasureState> measureStateByKey,
-                                                    Map<Integer, NoteMapping.SheetInfo> sheetByNumber)
+                                                    Map<Integer, NoteMapping.SheetInfo> sheetByNumber,
+                                                    BindingDiagnostics diagnostics)
     {
         final List<NoteState> result = new ArrayList<>();
         final Map<String, Integer> occurrenceCounters = new HashMap<>();
+        final Map<String, Integer> measureNoteOrdinalCounters = new HashMap<>();
 
         for (NoteMapping.NoteEntry note : notes) {
             final MeasureState measure = measureStateByKey.get(measureKey(note));
             final NoteMapping.SheetInfo sheet = sheetByNumber.get(note.sheetNumber);
 
-            if ((measure == null) || (sheet == null)) {
+            if (measure == null) {
+                diagnostics.rejects.add(BindingReject.forNote("measure-unresolved", note));
+                continue;
+            }
+
+            if (sheet == null) {
+                diagnostics.rejects.add(BindingReject.forNote("measure-unresolved", note));
                 continue;
             }
 
@@ -308,11 +332,14 @@ public final class GeometrySidecarExporter
             final NormalizedRect bbox = normalize(note.chordBounds, sheet.imageWidth, sheet.imageHeight);
             final NormalizedRect noteHeadBox = normalize(note.bounds, sheet.imageWidth, sheet.imageHeight);
             final String noteId = "note-" + note.globalNoteIndex;
+            final int xmlNoteOrdinalInMeasure = measureNoteOrdinalCounters.getOrDefault(measure.key, 0);
+            measureNoteOrdinalCounters.put(measure.key, xmlNoteOrdinalInMeasure + 1);
 
             final NoteState state = new NoteState(
                     noteId,
                     note.globalNoteIndex,
                     note.noteIndex,
+                    xmlNoteOrdinalInMeasure,
                     note.partId,
                     note.measureNumber,
                     measure.measureIndex,
@@ -321,12 +348,19 @@ public final class GeometrySidecarExporter
                     note.systemIndex,
                     measure.measureId,
                     measure.systemId,
+                    measure.physicalMeasureIndex,
+                    measure.measureStackId,
+                    measure.measureStackScoreId,
+                    measure.physicalSystemId,
+                    measure.systemOrderInPage,
+                    measure.staffIds,
                     voice,
                     note.voice,
                     absoluteStartDiv,
                     note.duration,
                     midiPitch,
                     occurrence,
+                    note.noteIndexInChord,
                     note.isRest,
                     note.isGrace,
                     note.isMeasureRest,
@@ -349,6 +383,28 @@ public final class GeometrySidecarExporter
         }
 
         return result;
+    }
+
+    private static Map<String, Integer> buildPlayableOrdinalByNoteId (List<NoteState> notes)
+    {
+        final List<NoteState> playableInXmlOrder = new ArrayList<>();
+        for (NoteState note : notes) {
+            if (isPlayable(note)) {
+                playableInXmlOrder.add(note);
+            }
+        }
+
+        playableInXmlOrder.sort(Comparator.comparingInt(note -> note.globalNoteIndex));
+
+        final Map<String, Integer> nextOrdinalByPart = new HashMap<>();
+        final Map<String, Integer> playableOrdinalByNoteId = new HashMap<>();
+        for (NoteState note : playableInXmlOrder) {
+            final int nextOrdinal = nextOrdinalByPart.getOrDefault(note.partId, 0);
+            playableOrdinalByNoteId.put(note.noteId, nextOrdinal);
+            nextOrdinalByPart.put(note.partId, nextOrdinal + 1);
+        }
+
+        return playableOrdinalByNoteId;
     }
 
     private static Integer computeMidiPitch (NoteMapping.NoteEntry note)
@@ -522,6 +578,11 @@ public final class GeometrySidecarExporter
             sb.append(indent).append("    \"partId\": ").append(jsonString(measure.partId)).append(",\n");
             sb.append(indent).append("    \"measureIndex\": ").append(measure.measureIndex).append(",\n");
             sb.append(indent).append("    \"measureNumber\": ").append(jsonString(measure.measureNumber)).append(",\n");
+            appendMusicXml(sb, measure, indent + "    ");
+            sb.append(",\n");
+            appendPhysical(sb, measure, indent + "    ");
+            sb.append(",\n");
+            sb.append(indent).append("    \"bindingStatus\": \"bound\",\n");
             sb.append(indent).append("    \"noteIds\": ").append(stringArray(measure.noteIds)).append(",\n");
             sb.append(indent).append("    \"sourceBBox\": ").append(toBoundsJson(measure.sourceBBox)).append("\n");
             sb.append(indent).append("  }");
@@ -536,6 +597,7 @@ public final class GeometrySidecarExporter
 
     private static void appendNotes (StringBuilder sb,
                                      List<NoteState> notes,
+                                     Map<String, Integer> playableOrdinalByNoteId,
                                      String indent)
     {
         sb.append(indent).append("\"notes\": [\n");
@@ -561,6 +623,10 @@ public final class GeometrySidecarExporter
             sb.append(indent).append("      \"midiPitch\": ").append(note.midiPitch != null ? note.midiPitch : "null").append(",\n");
             sb.append(indent).append("      \"occurrence\": ").append(note.occurrence).append("\n");
             sb.append(indent).append("    },\n");
+            appendMusicXml(sb, note, playableOrdinalByNoteId.get(note.noteId), indent + "    ");
+            sb.append(",\n");
+            appendPhysical(sb, note, indent + "    ");
+            sb.append(",\n");
             sb.append(indent).append("    \"flags\": {\n");
             sb.append(indent).append("      \"isRest\": ").append(note.isRest).append(",\n");
             sb.append(indent).append("      \"isGrace\": ").append(note.isGrace).append(",\n");
@@ -575,7 +641,8 @@ public final class GeometrySidecarExporter
             sb.append(indent).append("    },\n");
             sb.append(indent).append("    \"raw\": {\n");
             sb.append(indent).append("      \"globalNoteIndex\": ").append(note.globalNoteIndex).append(",\n");
-            sb.append(indent).append("      \"noteIndex\": ").append(note.noteIndex).append("\n");
+            sb.append(indent).append("      \"noteIndex\": ").append(note.noteIndex).append(",\n");
+            sb.append(indent).append("      \"noteIndexInChord\": ").append(note.noteIndexInChord).append("\n");
             sb.append(indent).append("    },\n");
             appendProvenance(sb, note, indent + "    ");
             sb.append(",\n");
@@ -591,8 +658,74 @@ public final class GeometrySidecarExporter
         sb.append(indent).append("]");
     }
 
+    private static void appendMusicXml (StringBuilder sb,
+                                        MeasureState measure,
+                                        String indent)
+    {
+        sb.append(indent).append("\"musicXml\": {\n");
+        sb.append(indent).append("  \"xmlPartId\": ").append(jsonString(measure.partId)).append(",\n");
+        sb.append(indent).append("  \"xmlMeasureIndex\": ").append(measure.measureIndex).append(",\n");
+        sb.append(indent).append("  \"xmlMeasureNumber\": ").append(jsonString(measure.measureNumber)).append("\n");
+        sb.append(indent).append("}");
+    }
+
+    private static void appendMusicXml (StringBuilder sb,
+                                        NoteState note,
+                                        Integer playableOrdinalInPart,
+                                        String indent)
+    {
+        sb.append(indent).append("\"musicXml\": {\n");
+        sb.append(indent).append("  \"xmlPartId\": ").append(jsonString(note.partId)).append(",\n");
+        sb.append(indent).append("  \"xmlMeasureIndex\": ").append(note.measureIndex).append(",\n");
+        sb.append(indent).append("  \"xmlMeasureNumber\": ").append(jsonString(note.measureNumber)).append(",\n");
+        sb.append(indent).append("  \"xmlNoteOrdinal\": ").append(note.noteIndex).append(",\n");
+        sb.append(indent).append("  \"xmlNoteOrdinalInMeasure\": ")
+                .append(note.xmlNoteOrdinalInMeasure)
+                .append(",\n");
+        sb.append(indent).append("  \"playableOrdinalInPart\": ")
+                .append(playableOrdinalInPart != null ? playableOrdinalInPart : "null")
+                .append(",\n");
+        sb.append(indent).append("  \"exported\": true\n");
+        sb.append(indent).append("}");
+    }
+
+    private static void appendPhysical (StringBuilder sb,
+                                        MeasureState measure,
+                                        String indent)
+    {
+        sb.append(indent).append("\"physical\": {\n");
+        sb.append(indent).append("  \"physicalMeasureIndex\": ").append(measure.physicalMeasureIndex).append(",\n");
+        sb.append(indent).append("  \"measureStackId\": ").append(jsonString(measure.measureStackId)).append(",\n");
+        sb.append(indent).append("  \"measureStackScoreId\": ").append(jsonString(measure.measureStackScoreId)).append(",\n");
+        sb.append(indent).append("  \"pageIndex\": ").append(measure.sheetNumber - 1).append(",\n");
+        sb.append(indent).append("  \"pageNumber\": ").append(measure.sheetNumber).append(",\n");
+        sb.append(indent).append("  \"systemId\": ").append(numberOrNull(measure.physicalSystemId)).append(",\n");
+        sb.append(indent).append("  \"systemOrderInPage\": ").append(measure.systemOrderInPage).append(",\n");
+        sb.append(indent).append("  \"partId\": ").append(jsonString(measure.partId)).append(",\n");
+        sb.append(indent).append("  \"staffIds\": ").append(integerArray(measure.staffIds)).append("\n");
+        sb.append(indent).append("}");
+    }
+
+    private static void appendPhysical (StringBuilder sb,
+                                        NoteState note,
+                                        String indent)
+    {
+        final Integer systemId = (note.physicalSystemId != null) ? note.physicalSystemId : note.provenanceSystemId;
+
+        sb.append(indent).append("\"physical\": {\n");
+        sb.append(indent).append("  \"physicalMeasureIndex\": ").append(note.physicalMeasureIndex).append(",\n");
+        sb.append(indent).append("  \"measureStackId\": ").append(jsonString(note.measureStackId)).append(",\n");
+        sb.append(indent).append("  \"measureStackScoreId\": ").append(jsonString(note.measureStackScoreId)).append(",\n");
+        sb.append(indent).append("  \"pageIndex\": ").append(note.sheetNumber - 1).append(",\n");
+        sb.append(indent).append("  \"systemId\": ").append(numberOrNull(systemId)).append(",\n");
+        sb.append(indent).append("  \"partId\": ").append(jsonString(note.partId)).append(",\n");
+        sb.append(indent).append("  \"staffId\": ").append(numberOrNull(note.staffId)).append("\n");
+        sb.append(indent).append("}");
+    }
+
     private static void appendPlayback (StringBuilder sb,
                                         List<NoteState> notes,
+                                        Map<String, Integer> playableOrdinalByNoteId,
                                         String indent)
     {
         sb.append(indent).append("\"playback\": {\n");
@@ -600,24 +733,13 @@ public final class GeometrySidecarExporter
         sb.append(indent).append("  \"advisoryTiming\": true,\n");
         sb.append(indent).append("  \"noteRefs\": [\n");
 
-        final List<NoteState> playableInXmlOrder = new ArrayList<>();
+        final List<NoteState> playableInPlaybackOrder = new ArrayList<>();
         for (NoteState note : notes) {
             if (isPlayable(note)) {
-                playableInXmlOrder.add(note);
+                playableInPlaybackOrder.add(note);
             }
         }
 
-        playableInXmlOrder.sort(Comparator.comparingInt(note -> note.globalNoteIndex));
-
-        final Map<String, Integer> nextOrdinalByPart = new HashMap<>();
-        final Map<String, Integer> playableOrdinalByNoteId = new HashMap<>();
-        for (NoteState note : playableInXmlOrder) {
-            final int nextOrdinal = nextOrdinalByPart.getOrDefault(note.partId, 0);
-            playableOrdinalByNoteId.put(note.noteId, nextOrdinal);
-            nextOrdinalByPart.put(note.partId, nextOrdinal + 1);
-        }
-
-        final List<NoteState> playableInPlaybackOrder = new ArrayList<>(playableInXmlOrder);
         playableInPlaybackOrder.sort(
                 Comparator.comparingLong((NoteState note) -> note.startMs)
                         .thenComparing(note -> note.partId)
@@ -632,6 +754,10 @@ public final class GeometrySidecarExporter
             sb.append(indent).append("      \"noteId\": ").append(jsonString(note.noteId)).append(",\n");
             sb.append(indent).append("      \"playbackIndex\": ").append(index).append(",\n");
             sb.append(indent).append("      \"musicXmlNoteOrdinal\": ").append(musicXmlNoteOrdinal).append(",\n");
+            appendMusicXml(sb, note, musicXmlNoteOrdinal, indent + "      ");
+            sb.append(",\n");
+            appendPhysical(sb, note, indent + "      ");
+            sb.append(",\n");
             sb.append(indent).append("      \"semantic\": {\n");
             sb.append(indent).append("        \"partId\": ").append(jsonString(note.partId)).append(",\n");
             sb.append(indent).append("        \"voice\": ").append(note.voice != null ? note.voice : "null").append(",\n");
@@ -659,6 +785,111 @@ public final class GeometrySidecarExporter
         }
 
         sb.append(indent).append("  ]\n");
+        sb.append(indent).append("}");
+    }
+
+    private static void appendChords (StringBuilder sb,
+                                      List<NoteState> notes,
+                                      String indent)
+    {
+        final Map<Integer, List<NoteState>> notesByChord = new LinkedHashMap<>();
+        for (NoteState note : notes) {
+            if ((note.chordInterId != null) && !note.isRest) {
+                notesByChord.computeIfAbsent(note.chordInterId, key -> new ArrayList<>()).add(note);
+            }
+        }
+
+        sb.append(indent).append("\"chords\": [\n");
+        int chordIndex = 0;
+        for (Map.Entry<Integer, List<NoteState>> entry : notesByChord.entrySet()) {
+            final List<NoteState> chordNotes = entry.getValue();
+            chordNotes.sort(Comparator
+                    .comparingInt((NoteState note) -> note.noteIndexInChord)
+                    .thenComparingInt(note -> note.globalNoteIndex));
+
+            final NoteState root = chordNotes.get(0);
+            sb.append(indent).append("  {\n");
+            sb.append(indent).append("    \"id\": ").append(jsonString("chord-" + entry.getKey())).append(",\n");
+            sb.append(indent).append("    \"chordInterId\": ").append(entry.getKey()).append(",\n");
+            sb.append(indent).append("    \"rootNoteInterId\": ").append(numberOrNull(root.noteInterId)).append(",\n");
+            sb.append(indent).append("    \"memberNoteInterIds\": ")
+                    .append(noteInterIdArray(chordNotes))
+                    .append(",\n");
+            sb.append(indent).append("    \"exportedNoteIds\": ")
+                    .append(noteIdArray(chordNotes))
+                    .append(",\n");
+            sb.append(indent).append("    \"exportedXmlOrdinals\": [\n");
+            for (int noteIndex = 0; noteIndex < chordNotes.size(); noteIndex++) {
+                final NoteState note = chordNotes.get(noteIndex);
+                sb.append(indent).append("      {\n");
+                sb.append(indent).append("        \"noteId\": ").append(jsonString(note.noteId)).append(",\n");
+                sb.append(indent).append("        \"xmlPartId\": ").append(jsonString(note.partId)).append(",\n");
+                sb.append(indent).append("        \"xmlMeasureIndex\": ").append(note.measureIndex).append(",\n");
+                sb.append(indent).append("        \"xmlNoteOrdinal\": ").append(note.noteIndex).append(",\n");
+                sb.append(indent).append("        \"xmlNoteOrdinalInMeasure\": ")
+                        .append(note.xmlNoteOrdinalInMeasure)
+                        .append(",\n");
+                sb.append(indent).append("        \"noteIndexInChord\": ")
+                        .append(note.noteIndexInChord)
+                        .append(",\n");
+                sb.append(indent).append("        \"chordRole\": ")
+                        .append(jsonString(note.noteIndexInChord == 0 ? "root" : "member"))
+                        .append("\n");
+                sb.append(indent).append("      }");
+                if (noteIndex < chordNotes.size() - 1) {
+                    sb.append(",");
+                }
+                sb.append("\n");
+            }
+            sb.append(indent).append("    ],\n");
+            sb.append(indent).append("    \"sameOnset\": {\n");
+            sb.append(indent).append("      \"startDivision\": ").append(root.startDivision).append(",\n");
+            sb.append(indent).append("      \"durationDivisions\": ").append(root.durationDivisions).append(",\n");
+            sb.append(indent).append("      \"voiceRaw\": ").append(jsonString(root.voiceRaw)).append(",\n");
+            sb.append(indent).append("      \"staff\": ").append(root.staff).append(",\n");
+            sb.append(indent).append("      \"evidence\": \"same-chord-inter\"\n");
+            sb.append(indent).append("    },\n");
+            sb.append(indent).append("    \"source\": {\n");
+            sb.append(indent).append("      \"partId\": ").append(jsonString(root.partId)).append(",\n");
+            sb.append(indent).append("      \"staffId\": ").append(numberOrNull(root.staffId)).append(",\n");
+            sb.append(indent).append("      \"systemId\": ").append(numberOrNull(root.provenanceSystemId)).append(",\n");
+            sb.append(indent).append("      \"measureId\": ").append(jsonString(root.measureId)).append("\n");
+            sb.append(indent).append("    }\n");
+            sb.append(indent).append("  }");
+            if (++chordIndex < notesByChord.size()) {
+                sb.append(",");
+            }
+            sb.append("\n");
+        }
+        sb.append(indent).append("]");
+    }
+
+    private static void appendBindingDiagnostics (StringBuilder sb,
+                                                  BindingDiagnostics diagnostics,
+                                                  String indent)
+    {
+        sb.append(indent).append("\"bindingDiagnostics\": {\n");
+        sb.append(indent).append("  \"rejects\": [\n");
+        for (int index = 0; index < diagnostics.rejects.size(); index++) {
+            final BindingReject reject = diagnostics.rejects.get(index);
+            sb.append(indent).append("    {\n");
+            sb.append(indent).append("      \"reason\": ").append(jsonString(reject.reason)).append(",\n");
+            sb.append(indent).append("      \"objectType\": ").append(jsonString(reject.objectType)).append(",\n");
+            sb.append(indent).append("      \"noteInterId\": ").append(numberOrNull(reject.noteInterId)).append(",\n");
+            sb.append(indent).append("      \"chordInterId\": ").append(numberOrNull(reject.chordInterId)).append(",\n");
+            sb.append(indent).append("      \"staffId\": ").append(numberOrNull(reject.staffId)).append(",\n");
+            sb.append(indent).append("      \"partId\": ").append(jsonString(reject.partId)).append(",\n");
+            sb.append(indent).append("      \"xmlMeasureNumber\": ")
+                    .append(jsonString(reject.xmlMeasureNumber))
+                    .append("\n");
+            sb.append(indent).append("    }");
+            if (index < diagnostics.rejects.size() - 1) {
+                sb.append(",");
+            }
+            sb.append("\n");
+        }
+        sb.append(indent).append("  ],\n");
+        sb.append(indent).append("  \"conflicts\": []\n");
         sb.append(indent).append("}");
     }
 
@@ -782,6 +1013,44 @@ public final class GeometrySidecarExporter
         return sb.toString();
     }
 
+    private static String integerArray (List<Integer> values)
+    {
+        final StringBuilder sb = new StringBuilder("[");
+
+        for (int index = 0; index < values.size(); index++) {
+            if (index > 0) {
+                sb.append(", ");
+            }
+
+            sb.append(values.get(index));
+        }
+
+        sb.append("]");
+        return sb.toString();
+    }
+
+    private static String noteInterIdArray (List<NoteState> notes)
+    {
+        final List<Integer> values = new ArrayList<>();
+        for (NoteState note : notes) {
+            if (note.noteInterId != null) {
+                values.add(note.noteInterId);
+            }
+        }
+
+        return integerArray(values);
+    }
+
+    private static String noteIdArray (List<NoteState> notes)
+    {
+        final List<String> values = new ArrayList<>();
+        for (NoteState note : notes) {
+            values.add(note.noteId);
+        }
+
+        return stringArray(values);
+    }
+
     private static String toBoundsJson (NoteMapping.BoundsInfo bounds)
     {
         return "{\"x\": " + bounds.x + ", \"y\": " + bounds.y + ", \"width\": " +
@@ -878,6 +1147,12 @@ public final class GeometrySidecarExporter
         final int systemIndex;
         final int measureIndex;
         final int cumulativeTimeOffset;
+        final int physicalMeasureIndex;
+        final String measureStackId;
+        final String measureStackScoreId;
+        final Integer physicalSystemId;
+        final int systemOrderInPage;
+        final List<Integer> staffIds;
         final NormalizedRect bbox;
         final NoteMapping.BoundsInfo sourceBBox;
         final List<String> noteIds;
@@ -891,6 +1166,12 @@ public final class GeometrySidecarExporter
                       int systemIndex,
                       int measureIndex,
                       int cumulativeTimeOffset,
+                      int physicalMeasureIndex,
+                      String measureStackId,
+                      String measureStackScoreId,
+                      Integer physicalSystemId,
+                      int systemOrderInPage,
+                      List<Integer> staffIds,
                       NormalizedRect bbox,
                       NoteMapping.BoundsInfo sourceBBox,
                       List<String> noteIds)
@@ -904,6 +1185,12 @@ public final class GeometrySidecarExporter
             this.systemIndex = systemIndex;
             this.measureIndex = measureIndex;
             this.cumulativeTimeOffset = cumulativeTimeOffset;
+            this.physicalMeasureIndex = physicalMeasureIndex;
+            this.measureStackId = measureStackId;
+            this.measureStackScoreId = measureStackScoreId;
+            this.physicalSystemId = physicalSystemId;
+            this.systemOrderInPage = systemOrderInPage;
+            this.staffIds = staffIds;
             this.bbox = bbox;
             this.sourceBBox = sourceBBox;
             this.noteIds = noteIds;
@@ -915,6 +1202,7 @@ public final class GeometrySidecarExporter
         final String noteId;
         final int globalNoteIndex;
         final int noteIndex;
+        final int xmlNoteOrdinalInMeasure;
         final String partId;
         final String measureNumber;
         final int measureIndex;
@@ -923,12 +1211,19 @@ public final class GeometrySidecarExporter
         final int systemIndex;
         final String measureId;
         final String systemId;
+        final int physicalMeasureIndex;
+        final String measureStackId;
+        final String measureStackScoreId;
+        final Integer physicalSystemId;
+        final int systemOrderInPage;
+        final List<Integer> staffIds;
         final Integer voice;
         final String voiceRaw;
         final int startDivision;
         final int durationDivisions;
         final Integer midiPitch;
         final int occurrence;
+        final int noteIndexInChord;
         final boolean isRest;
         final boolean isGrace;
         final boolean isMeasureRest;
@@ -949,6 +1244,7 @@ public final class GeometrySidecarExporter
         NoteState (String noteId,
                    int globalNoteIndex,
                    int noteIndex,
+                   int xmlNoteOrdinalInMeasure,
                    String partId,
                    String measureNumber,
                    int measureIndex,
@@ -957,12 +1253,19 @@ public final class GeometrySidecarExporter
                    int systemIndex,
                    String measureId,
                    String systemId,
+                   int physicalMeasureIndex,
+                   String measureStackId,
+                   String measureStackScoreId,
+                   Integer physicalSystemId,
+                   int systemOrderInPage,
+                   List<Integer> staffIds,
                    Integer voice,
                    String voiceRaw,
                    int startDivision,
                    int durationDivisions,
                    Integer midiPitch,
                    int occurrence,
+                   int noteIndexInChord,
                    boolean isRest,
                    boolean isGrace,
                    boolean isMeasureRest,
@@ -983,6 +1286,7 @@ public final class GeometrySidecarExporter
             this.noteId = noteId;
             this.globalNoteIndex = globalNoteIndex;
             this.noteIndex = noteIndex;
+            this.xmlNoteOrdinalInMeasure = xmlNoteOrdinalInMeasure;
             this.partId = partId;
             this.measureNumber = measureNumber;
             this.measureIndex = measureIndex;
@@ -991,12 +1295,19 @@ public final class GeometrySidecarExporter
             this.systemIndex = systemIndex;
             this.measureId = measureId;
             this.systemId = systemId;
+            this.physicalMeasureIndex = physicalMeasureIndex;
+            this.measureStackId = measureStackId;
+            this.measureStackScoreId = measureStackScoreId;
+            this.physicalSystemId = physicalSystemId;
+            this.systemOrderInPage = systemOrderInPage;
+            this.staffIds = staffIds;
             this.voice = voice;
             this.voiceRaw = voiceRaw;
             this.startDivision = startDivision;
             this.durationDivisions = durationDivisions;
             this.midiPitch = midiPitch;
             this.occurrence = occurrence;
+            this.noteIndexInChord = noteIndexInChord;
             this.isRest = isRest;
             this.isGrace = isGrace;
             this.isMeasureRest = isMeasureRest;
@@ -1013,6 +1324,52 @@ public final class GeometrySidecarExporter
             this.glyphId = glyphId;
             this.startMs = startMs;
             this.durationMs = durationMs;
+        }
+    }
+
+    private static final class BindingDiagnostics
+    {
+        final List<BindingReject> rejects = new ArrayList<>();
+    }
+
+    private static final class BindingReject
+    {
+        final String reason;
+        final String objectType;
+        final Integer noteInterId;
+        final Integer chordInterId;
+        final Integer staffId;
+        final String partId;
+        final String xmlMeasureNumber;
+
+        private BindingReject (String reason,
+                               String objectType,
+                               Integer noteInterId,
+                               Integer chordInterId,
+                               Integer staffId,
+                               String partId,
+                               String xmlMeasureNumber)
+        {
+            this.reason = reason;
+            this.objectType = objectType;
+            this.noteInterId = noteInterId;
+            this.chordInterId = chordInterId;
+            this.staffId = staffId;
+            this.partId = partId;
+            this.xmlMeasureNumber = xmlMeasureNumber;
+        }
+
+        static BindingReject forNote (String reason,
+                                      NoteMapping.NoteEntry note)
+        {
+            return new BindingReject(
+                    reason,
+                    "note",
+                    note.noteInterId,
+                    note.chordInterId,
+                    note.staffId,
+                    note.partId,
+                    note.measureNumber);
         }
     }
 

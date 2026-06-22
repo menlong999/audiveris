@@ -162,7 +162,7 @@ public class RunTable
         this.orientation = null;
         this.width = 0;
         this.height = 0;
-        this.sequences = null;
+        this.sequences = new RunSequence[0];
     }
 
     /**

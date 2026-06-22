@@ -22,6 +22,7 @@
 package org.audiveris.omr.run;
 
 import static org.audiveris.omr.run.Orientation.HORIZONTAL;
+import static org.audiveris.omr.run.Orientation.VERTICAL;
 import org.audiveris.omr.util.BaseTestCase;
 import org.audiveris.omr.util.Jaxb;
 
@@ -31,6 +32,7 @@ import java.awt.Dimension;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.StringReader;
 import java.nio.file.Files;
 
 import javax.xml.bind.JAXBContext;
@@ -91,6 +93,22 @@ public class RunTableBindingTest
 
         assertEquals(table.dumpOf(), newTable.dumpOf());
         assertEquals(table, newTable);
+    }
+
+    @Test
+    public void testUnmarshalZeroWidthTable ()
+            throws JAXBException
+    {
+        jaxbContext = JAXBContext.newInstance(RunTable.class);
+
+        final String xml = "<run-table orientation=\"VERTICAL\" width=\"0\" height=\"30\"/>";
+        final RunTable table = (RunTable) jaxbContext.createUnmarshaller().unmarshal(
+                new StringReader(xml));
+
+        assertEquals(VERTICAL, table.getOrientation());
+        assertEquals(0, table.getWidth());
+        assertEquals(30, table.getHeight());
+        assertEquals(0, table.getSize());
     }
 
     //--------------------------//

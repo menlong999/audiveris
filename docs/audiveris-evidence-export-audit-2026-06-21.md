@@ -258,7 +258,7 @@ Implemented A fields:
 Implemented B fields:
 
 - top-level `chords[]`
-- exported non-rest note membership grouped by `chordInterId`
+- exported non-rest note membership grouped by scoped `(chordInterId, measureId)`
 - `chordInterId`
 - `rootNoteInterId`
 - `memberNoteInterIds`
@@ -495,14 +495,17 @@ Backend consumption contract:
 - Prefer `same-chord-inter` over bbox/onset clustering for `<chord/>` repair proof.
 - Treat `chordRole=root/member` as Audiveris export intent.
 - Reject if a MusicXML chord marker conflicts with `chordInterId` membership.
+- Do not key top-level chord evidence by bare `chordInterId`. Use `chords[].id` or
+  `(source.measureId, chordInterId)`, because Audiveris `Inter` ids can be reused across source
+  graph scopes in multi-page exports.
 
 Implementation notes:
 
 - Preserve `noteIndexInChord` in normalized `NoteState`.
-- Group `NoteState` by non-null `chordInterId`.
+- Group `NoteState` by non-null `chordInterId` plus `measureId`.
 - Root is `noteIndexInChord == 0`; members are `> 0`.
 - `sameOnset` can be exported from current `startDivision`, `durationDivisions`, `voiceRaw`, staff,
-  and `chordInterId`.
+  `chordInterId`, and scoped measure identity.
 
 ### C. Physical measure binding
 
@@ -693,6 +696,8 @@ RED test covered:
 - a two-note `chordInterId` exports root/member evidence and same-onset evidence;
 - measures, notes, and playback refs expose physical measure binding;
 - an intentionally unresolved measure note is emitted as a bounded `measure-unresolved` reject.
+- a reused `chordInterId` in a different measure scope is not merged into the same top-level
+  `chords[]` evidence object.
 
 Focused verification command:
 
@@ -701,6 +706,27 @@ JAVA_HOME=/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home PATH=/opt/
 ```
 
 Result: passed.
+
+## 2026-06-22 Corpus Follow-Up
+
+After rebuilding the arm64 base and worker images from fork commit `91022729a5...`, the 170 PDF
+category corpus reached terminal state with `SUCCEEDED=159` and `FAILED=11`. Backend read-only gate
+passed with `completeSuccessDirtyArtifactSets=157/157`.
+
+Real artifact inspection across the 159 succeeded jobs confirmed:
+
+- `source.geometry.sidecar.json` fetched and parsed for 159/159 succeeded jobs;
+- every fetched sidecar had per-note `musicXml` and `physical` evidence;
+- every fetched sidecar had per-measure `musicXml` and `physical` evidence;
+- every fetched sidecar had top-level `chords[]` and `bindingDiagnostics`;
+- playback refs had nested `musicXml`/`physical` in 154/159 succeeded jobs; the remaining jobs need
+  separate playback-ref investigation, but per-note ordinal evidence is present.
+
+The same inspection exposed a B-slice bug in the initial implementation: grouping top-level
+`chords[]` by bare `chordInterId` merged unrelated notes when an Audiveris inter id was reused in a
+different measure/part/system scope. The observed pre-fix export had 34,292 conflicting chord
+objects across 103 files. The fork now scopes chord grouping by `(chordInterId, measureId)` and
+keeps `chordInterId` as provenance rather than as the globally unique chord key.
 
 ## Backend-Consumable Example
 

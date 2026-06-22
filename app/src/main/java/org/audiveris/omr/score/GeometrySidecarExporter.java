@@ -792,25 +792,36 @@ public final class GeometrySidecarExporter
                                       List<NoteState> notes,
                                       String indent)
     {
-        final Map<Integer, List<NoteState>> notesByChord = new LinkedHashMap<>();
+        final Map<String, List<NoteState>> notesByChord = new LinkedHashMap<>();
         for (NoteState note : notes) {
             if ((note.chordInterId != null) && !note.isRest) {
-                notesByChord.computeIfAbsent(note.chordInterId, key -> new ArrayList<>()).add(note);
+                notesByChord.computeIfAbsent(chordGroupKey(note), key -> new ArrayList<>()).add(note);
+            }
+        }
+
+        final Map<Integer, Integer> chordInterIdGroupCounts = new HashMap<>();
+        for (List<NoteState> chordNotes : notesByChord.values()) {
+            if (!chordNotes.isEmpty() && (chordNotes.get(0).chordInterId != null)) {
+                chordInterIdGroupCounts.merge(chordNotes.get(0).chordInterId, 1, Integer::sum);
             }
         }
 
         sb.append(indent).append("\"chords\": [\n");
         int chordIndex = 0;
-        for (Map.Entry<Integer, List<NoteState>> entry : notesByChord.entrySet()) {
+        for (Map.Entry<String, List<NoteState>> entry : notesByChord.entrySet()) {
             final List<NoteState> chordNotes = entry.getValue();
             chordNotes.sort(Comparator
                     .comparingInt((NoteState note) -> note.noteIndexInChord)
                     .thenComparingInt(note -> note.globalNoteIndex));
 
             final NoteState root = chordNotes.get(0);
+            final boolean duplicateInterId = chordInterIdGroupCounts.getOrDefault(root.chordInterId, 0) > 1;
+            final String chordId = duplicateInterId
+                    ? "chord-" + root.chordInterId + "-" + root.measureId
+                    : "chord-" + root.chordInterId;
             sb.append(indent).append("  {\n");
-            sb.append(indent).append("    \"id\": ").append(jsonString("chord-" + entry.getKey())).append(",\n");
-            sb.append(indent).append("    \"chordInterId\": ").append(entry.getKey()).append(",\n");
+            sb.append(indent).append("    \"id\": ").append(jsonString(chordId)).append(",\n");
+            sb.append(indent).append("    \"chordInterId\": ").append(root.chordInterId).append(",\n");
             sb.append(indent).append("    \"rootNoteInterId\": ").append(numberOrNull(root.noteInterId)).append(",\n");
             sb.append(indent).append("    \"memberNoteInterIds\": ")
                     .append(noteInterIdArray(chordNotes))
@@ -862,6 +873,11 @@ public final class GeometrySidecarExporter
             sb.append("\n");
         }
         sb.append(indent).append("]");
+    }
+
+    private static String chordGroupKey (NoteState note)
+    {
+        return note.chordInterId + "|" + note.measureId;
     }
 
     private static void appendBindingDiagnostics (StringBuilder sb,

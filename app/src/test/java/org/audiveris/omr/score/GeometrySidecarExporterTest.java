@@ -213,6 +213,52 @@ public class GeometrySidecarExporterTest
         assertEquals("99", reject.path("xmlMeasureNumber").asText());
     }
 
+    @Test
+    public void testChordEvidenceDoesNotMergeSameInterIdAcrossMeasures ()
+        throws Exception
+    {
+        final NoteMapping mapping = new NoteMapping();
+        mapping.addSheet(new NoteMapping.SheetInfo(1, 1000, 1000));
+        mapping.addSystem(new NoteMapping.SystemInfo(0, 1, new Rectangle(0, 0, 1000, 400)));
+        mapping.addMeasure(
+                new NoteMapping.MeasureInfo(
+                        "P1",
+                        "1",
+                        1,
+                        0,
+                        0,
+                        0.0,
+                        4,
+                        1.0,
+                        new Rectangle(0, 0, 500, 200),
+                        List.of(new NoteMapping.StaffInfo(1, 0, 100))));
+        mapping.addMeasure(
+                new NoteMapping.MeasureInfo(
+                        "P1",
+                        "2",
+                        1,
+                        0,
+                        4,
+                        1.0,
+                        4,
+                        1.0,
+                        new Rectangle(500, 0, 500, 200),
+                        List.of(new NoteMapping.StaffInfo(1, 0, 100))));
+
+        mapping.addNote(evidenceNote(0, 0, "1", 0, 0, false, "C", 101, 202));
+        mapping.addNote(evidenceNote(0, 1, "2", 4, 0, false, "E", 102, 202));
+
+        final JsonNode chords = new ObjectMapper()
+                .readTree(GeometrySidecarExporter.buildJson(mapping, null, null))
+                .path("chords");
+
+        assertEquals(2, chords.size());
+        assertEquals(1, chords.get(0).path("exportedXmlOrdinals").size());
+        assertEquals(0, chords.get(0).path("exportedXmlOrdinals").get(0).path("xmlMeasureIndex").asInt());
+        assertEquals(1, chords.get(1).path("exportedXmlOrdinals").size());
+        assertEquals(1, chords.get(1).path("exportedXmlOrdinals").get(0).path("xmlMeasureIndex").asInt());
+    }
+
     private static JsonNode findChord (JsonNode chords,
                                        int chordInterId)
     {

@@ -70,8 +70,10 @@ public final class GeometrySidecarExporter
      * Build the geometry sidecar JSON string.
      *
      * @param noteMapping the collected note mapping
-     * @param inputPath the source input path, if any
-     * @param musicXmlPath the exported MusicXML path
+     * @param inputPath the source input path, if any. Used only to infer source kind and page
+     *                  geometry, never serialized.
+     * @param musicXmlPath the exported MusicXML path. Kept for call-site compatibility, never
+     *                     serialized.
      * @return the JSON payload
      */
     public static String buildJson (NoteMapping noteMapping,
@@ -112,8 +114,6 @@ public final class GeometrySidecarExporter
         sb.append("  \"engine\": \"audiveris-omr\",\n");
         sb.append("  \"source\": {\n");
         sb.append("    \"kind\": ").append(jsonString(sourceKind)).append(",\n");
-        sb.append("    \"inputPath\": ").append(jsonString((inputPath != null) ? inputPath.toString() : null)).append(",\n");
-        sb.append("    \"musicXmlPath\": ").append(jsonString((musicXmlPath != null) ? musicXmlPath.toString() : null)).append(",\n");
         sb.append("    \"pageCount\": ").append(sheetByNumber.size()).append("\n");
         sb.append("  },\n");
         sb.append("  \"coordinateSpace\": {\n");
@@ -905,7 +905,7 @@ public final class GeometrySidecarExporter
             sb.append("\n");
         }
         sb.append(indent).append("  ],\n");
-        sb.append(indent).append("  \"conflicts\": []\n");
+        sb.append(indent).append("  \"conflictStatus\": \"not-computed\"\n");
         sb.append(indent).append("}");
     }
 

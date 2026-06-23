@@ -9,6 +9,7 @@ import org.junit.Test;
 
 import java.awt.Point;
 import java.awt.Rectangle;
+import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -114,6 +115,26 @@ public class GeometrySidecarExporterTest
     }
 
     @Test
+    public void testSidecarDoesNotExposeLocalSourcePaths ()
+        throws Exception
+    {
+        final NoteMapping mapping = new NoteMapping();
+        mapping.addSheet(new NoteMapping.SheetInfo(1, 1000, 1000));
+
+        final JsonNode source = new ObjectMapper()
+                .readTree(GeometrySidecarExporter.buildJson(
+                        mapping,
+                        Path.of("/private/worker/input/source.pdf"),
+                        Path.of("/private/worker/output/source.xml")))
+                .path("source");
+
+        assertEquals("pdf", source.path("kind").asText());
+        assertEquals(1, source.path("pageCount").asInt());
+        assertFalse(source.has("inputPath"));
+        assertFalse(source.has("musicXmlPath"));
+    }
+
+    @Test
     public void testSidecarExportsOrdinalChordPhysicalAndRejectEvidence ()
         throws Exception
     {
@@ -211,6 +232,10 @@ public class GeometrySidecarExporterTest
         assertEquals(204, reject.path("chordInterId").asInt());
         assertEquals("P1", reject.path("partId").asText());
         assertEquals("99", reject.path("xmlMeasureNumber").asText());
+        assertEquals(
+                "not-computed",
+                root.path("bindingDiagnostics").path("conflictStatus").asText());
+        assertFalse(root.path("bindingDiagnostics").has("conflicts"));
     }
 
     @Test

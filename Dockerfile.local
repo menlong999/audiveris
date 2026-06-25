@@ -1,0 +1,212 @@
+# ==============================================================================
+# Dockerfile.local — 适用于国内 Mac (ARM64/Apple Silicon) 及 Linux 本地极速构建的 Audiveris 基础镜像
+# ==============================================================================
+#
+# 构建命令：
+#   docker build -f Dockerfile.local -t choral-worker-audiveris-base:latest .
+#
+# 镜像特点：
+#   1. 支持多架构自适应 (本地 Mac M1/M2/M3 自动编译为 arm64)
+#   2. 全面使用国内高速镜像源 (APT 阿里云源、Adoptium 南京大学源、Maven 阿里云源、Gradle 腾讯源、PyPI 阿里云源)
+#   3. 通过 gh-proxy.com 代理加速下载高精度 Tesseract OCR 训练模型
+#   4. 预缓存 PaddleOCR AI 模型，启动即用
+#
+
+ARG BASE_NODE_GLIBC_IMAGE=node:20-bullseye
+ARG BASE_UBUNTU_IMAGE=ubuntu:22.04
+
+# 阶段 1：提取 Node.js 运行时
+FROM ${BASE_NODE_GLIBC_IMAGE} AS node_runtime
+
+# 阶段 2：编译 Audiveris Java 应用程序
+FROM ${BASE_UBUNTU_IMAGE} AS audiveris_builder
+
+# TARGETARCH 由 Docker Buildx/Build 自动注入 (arm64 或 amd64)
+ARG TARGETARCH
+ARG UBUNTU_APT_MIRROR=archive.ubuntu.com
+ARG UBUNTU_SECURITY_MIRROR=security.ubuntu.com
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV JAVA_HOME=/opt/java
+ENV PATH=/opt/java/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# 1. 配置 Ubuntu APT 国内高速镜像源 (识别 arm64 自动切换到 ubuntu-ports 阿里源)
+RUN set -eux; \
+  rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; \
+  apt_url="http://${UBUNTU_APT_MIRROR}/ubuntu"; \
+  security_url="http://${UBUNTU_SECURITY_MIRROR}/ubuntu"; \
+  if [ "${TARGETARCH:-amd64}" = "arm64" ]; then \
+    if [ "${UBUNTU_APT_MIRROR}" = "archive.ubuntu.com" ] || [ "${UBUNTU_APT_MIRROR}" = "ports.ubuntu.com" ]; then \
+      apt_url="http://mirrors.aliyun.com/ubuntu-ports"; \
+    fi; \
+    if [ "${UBUNTU_SECURITY_MIRROR}" = "security.ubuntu.com" ] || [ "${UBUNTU_SECURITY_MIRROR}" = "ports.ubuntu.com" ]; then \
+      security_url="http://mirrors.aliyun.com/ubuntu-ports"; \
+    fi; \
+  else \
+    if [ "${UBUNTU_APT_MIRROR}" = "archive.ubuntu.com" ]; then \
+      apt_url="http://mirrors.aliyun.com/ubuntu"; \
+    fi; \
+    if [ "${UBUNTU_SECURITY_MIRROR}" = "security.ubuntu.com" ]; then \
+      security_url="http://mirrors.aliyun.com/ubuntu"; \
+    fi; \
+  fi; \
+  printf "deb %s jammy main restricted universe multiverse\n" "${apt_url}" > /etc/apt/sources.list; \
+  printf "deb %s jammy-updates main restricted universe multiverse\n" "${apt_url}" >> /etc/apt/sources.list; \
+  printf "deb %s jammy-backports main restricted universe multiverse\n" "${apt_url}" >> /etc/apt/sources.list; \
+  printf "deb %s jammy-security main restricted universe multiverse\n" "${security_url}" >> /etc/apt/sources.list
+
+# 2. 安装系统基础工具 & 从南京大学镜像源极速下载 JDK 25
+RUN set -eux; \
+  printf 'Acquire::Retries "8";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::http::No-Cache "true";\nAcquire::https::No-Cache "true";\n' > /etc/apt/apt.conf.d/99network-retry; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends ca-certificates curl git fontconfig; \
+  mkdir -p /opt/java; \
+  if [ "${TARGETARCH:-amd64}" = "arm64" ]; then \
+    jdk_arch="aarch64"; \
+  else \
+    jdk_arch="x64"; \
+  fi; \
+  curl -fsSL -o /tmp/openjdk.tar.gz \
+    "https://mirrors.nju.edu.cn/adoptium/25/jdk/${jdk_arch}/linux/OpenJDK25U-jdk_${jdk_arch}_linux_hotspot_25.0.3_9.tar.gz"; \
+  tar -xzf /tmp/openjdk.tar.gz -C /opt/java --strip-components=1; \
+  rm -f /tmp/openjdk.tar.gz; \
+  java -version; \
+  git --version
+
+WORKDIR /opt/audiveris-src
+
+# 3. 复制本地 Audiveris 源码
+COPY . .
+
+# 4. 配置 Gradle/Maven 阿里云与腾讯云镜像源，执行极速编译
+RUN set -eux; \
+  mkdir -p /root/.gradle; \
+  printf 'allprojects {\n  repositories {\n    maven { url "https://maven.aliyun.com/repository/public/" }\n    maven { url "https://maven.aliyun.com/repository/google/" }\n    maven { url "https://maven.aliyun.com/repository/gradle-plugin/" }\n    mavenLocal()\n    mavenCentral()\n  }\n}\nsettingsEvaluated { settings ->\n  settings.pluginManagement {\n    repositories {\n      maven { url "https://maven.aliyun.com/repository/public/" }\n      maven { url "https://maven.aliyun.com/repository/google/" }\n      maven { url "https://maven.aliyun.com/repository/gradle-plugin/" }\n      gradlePluginPortal()\n    }\n  }\n}\n' > /root/.gradle/init.gradle; \
+  if [ -f gradle/wrapper/gradle-wrapper.properties ]; then \
+    sed -i 's|services.gradle.org/distributions|mirrors.cloud.tencent.com/gradle|g' gradle/wrapper/gradle-wrapper.properties; \
+  fi; \
+  ./gradlew --no-daemon :app:installDist
+
+# 5. 记录本地构建的版本号
+RUN git rev-parse HEAD > /opt/audiveris-build-revision.txt || echo "local-build" > /opt/audiveris-build-revision.txt
+
+
+# 阶段 3：构建最终运行镜像
+FROM ${BASE_UBUNTU_IMAGE}
+
+ARG TARGETARCH
+ARG UBUNTU_APT_MIRROR=archive.ubuntu.com
+ARG UBUNTU_SECURITY_MIRROR=security.ubuntu.com
+# 使用 gh-proxy 加速下载 GitHub 上的官方高精度 OCR 模型
+ARG TESSDATA_BASE_URL=https://gh-proxy.com/https://raw.githubusercontent.com/tesseract-ocr/tessdata/main
+ARG AUDIVERIS_TESSDATA_DIR=/usr/share/tesseract-ocr/4.00/tessdata
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV JAVA_HOME=/opt/java
+ENV PATH=/opt/java/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV JAVA_TOOL_OPTIONS="-Djava.awt.headless=true"
+ENV PADDLE_PDX_MODEL_SOURCE=BOS
+ENV PADDLE_OCR_BASE_DIR=/root/.paddleocr
+ENV PIP_ROOT_USER_ACTION=ignore
+
+# 1. 为运行镜像配置 Ubuntu APT 国内高速镜像源
+RUN set -eux; \
+  rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; \
+  apt_url="http://${UBUNTU_APT_MIRROR}/ubuntu"; \
+  security_url="http://${UBUNTU_SECURITY_MIRROR}/ubuntu"; \
+  if [ "${TARGETARCH:-amd64}" = "arm64" ]; then \
+    if [ "${UBUNTU_APT_MIRROR}" = "archive.ubuntu.com" ] || [ "${UBUNTU_APT_MIRROR}" = "ports.ubuntu.com" ]; then \
+      apt_url="http://mirrors.aliyun.com/ubuntu-ports"; \
+    fi; \
+    if [ "${UBUNTU_SECURITY_MIRROR}" = "security.ubuntu.com" ] || [ "${UBUNTU_SECURITY_MIRROR}" = "ports.ubuntu.com" ]; then \
+      security_url="http://mirrors.aliyun.com/ubuntu-ports"; \
+    fi; \
+  else \
+    if [ "${UBUNTU_APT_MIRROR}" = "archive.ubuntu.com" ]; then \
+      apt_url="http://mirrors.aliyun.com/ubuntu"; \
+    fi; \
+    if [ "${UBUNTU_SECURITY_MIRROR}" = "security.ubuntu.com" ]; then \
+      security_url="http://mirrors.aliyun.com/ubuntu"; \
+    fi; \
+  fi; \
+  printf "deb %s jammy main restricted universe multiverse\n" "${apt_url}" > /etc/apt/sources.list; \
+  printf "deb %s jammy-updates main restricted universe multiverse\n" "${apt_url}" >> /etc/apt/sources.list; \
+  printf "deb %s jammy-backports main restricted universe multiverse\n" "${apt_url}" >> /etc/apt/sources.list; \
+  printf "deb %s jammy-security main restricted universe multiverse\n" "${security_url}" >> /etc/apt/sources.list
+
+# 2. 安装系统运行时依赖与 Tesseract OCR，并下载高精度 traineddata
+RUN set -eux; \
+  printf 'Acquire::Retries "8";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::http::No-Cache "true";\nAcquire::https::No-Cache "true";\n' > /etc/apt/apt.conf.d/99network-retry; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends \
+    ca-certificates curl \
+    libasound2 libbsd0 libc6 libglib2.0-0 libgl1 libmd0 libx11-6 libxau6 libxcb1 libxdmcp6 \
+    libxext6 libxi6 libxrender1 libxtst6 xdg-utils zlib1g \
+    fontconfig fonts-dejavu-core fonts-dejavu-extra fonts-liberation2 libgtk-3-0 \
+    python3 python3-pip \
+    poppler-utils \
+    tesseract-ocr; \
+  mkdir -p "${AUDIVERIS_TESSDATA_DIR}" /root/.config/AudiverisLtd/audiveris/tessdata; \
+  for lang in eng chi_sim; do \
+    curl --retry 6 --retry-all-errors -fsSL \
+      -o "${AUDIVERIS_TESSDATA_DIR}/${lang}.traineddata" \
+      "${TESSDATA_BASE_URL}/${lang}.traineddata"; \
+    cp "${AUDIVERIS_TESSDATA_DIR}/${lang}.traineddata" "/root/.config/AudiverisLtd/audiveris/tessdata/${lang}.traineddata"; \
+  done; \
+  fc-cache -f -v; \
+  rm -rf /var/lib/apt/lists/*
+
+# 3. 从编译阶段复制编译好的 Audiveris 文件和 Java 运行时
+COPY --from=audiveris_builder /opt/audiveris-src/app/build/install/app /opt/audiveris
+COPY --from=audiveris_builder /opt/audiveris-build-revision.txt /opt/audiveris/BUILD_REVISION
+COPY --from=audiveris_builder /opt/java /opt/java
+
+# 4. 创建软链接并进行初始验证
+RUN set -eux; \
+  ln -sf /opt/audiveris/bin/Audiveris /usr/local/bin/audiveris; \
+  printf 'git_url=https://github.com/menlong999/audiveris.git\ngit_ref=local\n' > /opt/audiveris/BUILD_SOURCE; \
+  /usr/local/bin/audiveris -batch -help >/tmp/audiveris-help.txt; \
+  head -n 20 /tmp/audiveris-help.txt; \
+  rm -f /tmp/audiveris-help.txt
+
+# 5. 复制 Node.js 运行时并验证
+COPY --from=node_runtime /usr/local/ /usr/local/
+RUN set -eux; \
+  node -v; \
+  npm -v
+
+# 6. 配置 PyPI 阿里云源并极速安装 Python AI 依赖
+RUN set -eux; \
+  python3 -m pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/; \
+  python3 -m pip config set global.trusted-host mirrors.aliyun.com; \
+  python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
+  python3 -m pip install --no-cache-dir paddlepaddle==3.2.2 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/; \
+  python3 -m pip install --no-cache-dir paddleocr==3.6.0
+
+# 7. 预先下载并缓存 PaddleOCR 所有的 AI 模型 (自百度 BOS 内网极速拉取)
+RUN python3 - <<'PY'
+from paddleocr import PaddleOCR, TextRecognition
+TextRecognition(
+    model_name="PP-OCRv5_server_rec",
+    device="cpu",
+    enable_mkldnn=True,
+    cpu_threads=4,
+)
+TextRecognition(
+    model_name="PP-OCRv5_mobile_rec",
+    device="cpu",
+    enable_mkldnn=False,
+    cpu_threads=1,
+)
+PaddleOCR(
+    lang="ch",
+    device="cpu",
+    use_doc_orientation_classify=False,
+    use_doc_unwarping=False,
+    use_textline_orientation=False,
+    enable_mkldnn=True,
+    cpu_threads=4,
+    text_detection_model_name="PP-OCRv5_mobile_det",
+    text_recognition_model_name="PP-OCRv4_server_rec_doc",
+)
+PY
